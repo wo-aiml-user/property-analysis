@@ -43,36 +43,37 @@ class JWTAuth:
 
     @staticmethod
     def verify_token(auth_header: str | None) -> dict:
-        """Verify JWT token and return user_id
+        """Verify JWT token and return payload
         
         Args:
             auth_header: Authorization header containing the Bearer token
             
         Returns:
-            dict: The user_id from the token payload
+            dict: The token payload
             
         Raises:
             HTTPException: If token is invalid or missing required data
         """
         if not auth_header:
             logger.error("No authorization header found")
-            raise HTTPException(status_code=403, detail="No authorization header found")
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        scheme = ""
+        token = ""
         
         try:
             scheme, token = auth_header.split()
         except ValueError:
             logger.error("Invalid authorization header format")
-            raise HTTPException(status_code=403, detail="Invalid authorization header format")
+            raise HTTPException(status_code=401, detail="Invalid authorization header format")
 
         if scheme.lower() != "bearer":
             logger.error("Invalid authentication scheme")
-            raise HTTPException(status_code=403, detail="Invalid authentication scheme")
+            raise HTTPException(status_code=401, detail="Invalid authentication scheme")
 
         try:
             payload = JWTAuth.decrypt_token(token)
-            logger.info(f"payload: {payload}")
-            
-            # TODO: Add validation for payload for e.g. user_id or domain
+            # logger.info(f"payload: {payload}")
                 
             return payload
             
@@ -80,4 +81,4 @@ class JWTAuth:
             raise
         except Exception as e:
             logger.error(f"Token validation error: {str(e)}")
-            raise HTTPException(status_code=403, detail="Invalid token")
+            raise HTTPException(status_code=401, detail="Invalid token")

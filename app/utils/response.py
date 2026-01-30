@@ -1,12 +1,13 @@
 from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
 from typing import Any
 from pydantic import BaseModel
 
+
 def success_response(data: Any, status_code: int = 200) -> JSONResponse:
-    if isinstance(data, BaseModel):
-        data = data.model_dump()
+    # jsonable_encoder handles Pydantic models and datetime objects
     return JSONResponse(
-        content={"result": data},
+        content=jsonable_encoder({"result": data}),
         status_code=status_code
     )
 

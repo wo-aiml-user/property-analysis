@@ -7,7 +7,7 @@ from loguru import logger
 
 from app.utils.response import success_response, error_response
 from app.model.chat_model import ChatRequest, ChatResponse, RegeneratedImage
-from app.llm.gemini_client import get_gemini_client
+from app.llm.openai_client import get_openai_client
 
 
 router = APIRouter()
@@ -16,12 +16,12 @@ router = APIRouter()
 @router.post("/chat", response_model=ChatResponse)
 async def regenerate_images(request: ChatRequest):
     """
-    Accept image URLs (from /doc/upload) and user feedback, regenerate images using Gemini.
+    Accept image URLs (from /doc/upload) and user feedback, regenerate images using OpenAI.
     
     Flow:
     1. Frontend sends image URLs (from PDF extraction)
     2. Backend downloads images from S3 (URL -> bytes)
-    3. Sends to Gemini model for regeneration
+    3. Sends to OpenAI model for regeneration
     4. Uploads regenerated images to S3
     5. Returns new S3 URLs
     
@@ -46,15 +46,18 @@ async def regenerate_images(request: ChatRequest):
         return error_response("At least one image must have a URL or base64 data", 400)
     
     try:
-        gemini = get_gemini_client()
+        # Use OpenAI Client
+        client = get_openai_client()
         
-        # Prepare image data for Gemini
+        # Prepare image data
         images_data = [
             {"url": img.url, "s3_key": img.s3_key, "data": img.data, "mime_type": img.mime_type}
             for img in valid_images
         ]
         
-        result = await gemini.regenerate_images(
+        # Use simple await if the method is async, but OpenAI's sync client might block.
+        # However, I defined regenerate_images as 'async def' in my client.
+        result = await client.regenerate_images(
             images=images_data,
             user_feedback=request.user_feedback,
             upload_to_s3=True

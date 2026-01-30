@@ -5,49 +5,53 @@ Workflow: Upload PDF to S3 -> Download bytes -> Extract images -> Upload images 
 
 from pathlib import Path
 from typing import List
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, UploadFile, File, Form, Depends, Request, HTTPException
 from loguru import logger
+from starlette.concurrency import run_in_threadpool
 
 from app.utils.response import success_response, error_response
-from app.model.doc_model import PDFUploadResponse, ExtractedImage
+from app.model.doc_model import PDFUploadResponse, ExtractedImage, PropertyData
 from app.services.pdf_extractor import get_pdf_extractor
 from app.services.s3_service import get_s3_service
-
+from app.services.mongo_service import get_mongo_service, MongoService
 
 router = APIRouter()
 
-
 @router.post("/upload", response_model=PDFUploadResponse)
-async def upload_pdfs(files: List[UploadFile] = File(...)):
+async def upload_pdfs(
+    request: Request,
+    property_id: str = Form(...),
+    files: List[UploadFile] = File(...),
+    mongo: MongoService = Depends(get_mongo_service)
+):
     """
-    Upload multiple PDF files to S3, download, extract images, and upload images to S3.
-    
-    Workflow:
-    1. Upload PDF to S3 (pdfs/ folder)
-    2. Download PDF bytes from S3
-    3. Parse PDF and extract images
-    4. Upload extracted images to S3
-    5. Return image URLs and metadata
+    Upload multiple PDF files, extract images, and create a property session.
     
     Parameters:
-    - files: List of PDF files to upload
-    
-    Returns:
-    - total_files: Number of PDFs processed
-    - total_pages: Total pages across all PDFs
-    - total_images: Number of extracted images
-    - images: Array of extracted images with:
-        - filename: Image filename
-        - page: Page number where image was found
-        - caption: Extracted caption/name
-        - url: S3 public URL
+    - property_id: Unique ID for the property (frontend generated)
+    - files: List of PDF files
     """
+    # 1. Authentication Check
+    if not hasattr(request.state, "jwt_payload") or not request.state.jwt_payload:
+        return error_response("Authentication required", 401)
+        
+    user_id = request.state.jwt_payload.get("user_id")
+    if not user_id:
+        return error_response("Invalid user session", 401)
+
     # Validate files
+    logger.info(f"Received {len(files)} files")
     for file in files:
-        if not file.filename.endswith('.pdf'):
-            return error_response(f"Only PDF files are allowed. Got: {file.filename}", 400)
+        logger.info(f"Checking file: '{file.filename}' (ContentType: {file.content_type})")
+        if not file.filename:
+            # Skip empty entries if any
+            continue
+            
+        if not file.filename.lower().endswith('.pdf'):
+            return JSONResponse(content={"error": f"Only PDF files are allowed. Got: {file.filename}"}, status_code=400)
     
     all_images = []
+    pdf_urls = []
     total_pages = 0
     
     try:
@@ -55,17 +59,21 @@ async def upload_pdfs(files: List[UploadFile] = File(...)):
         pdf_extractor = get_pdf_extractor()
         
         for file in files:
+            if not file.filename:
+                continue
             filename = file.filename
             logger.info(f"Processing PDF: {filename}")
             
             try:
-                # Step 1: Read file content
+                # Step 1: Read file content (Async IO)
                 file_content = await file.read()
                 
-                # Step 2: Upload PDF to S3
-                pdf_s3_result = s3_service.upload_file_to_s3(
+                # Step 2: Upload PDF to S3 (Blocking -> Threadpool)
+                # Note: S3 upload can be slow, better to offload
+                pdf_s3_result = await run_in_threadpool(
+                    s3_service.upload_file_to_s3,
                     buffer=file_content,
-                    key=f"pdfs/{filename}",
+                    key=f"pdfs/{property_id}/{filename}", # Organize by property_id
                     content_type="application/pdf"
                 )
                 
@@ -73,25 +81,33 @@ async def upload_pdfs(files: List[UploadFile] = File(...)):
                     logger.error(f"Failed to upload PDF to S3: {filename}")
                     continue
                 
-                logger.info(f"PDF uploaded to S3: {pdf_s3_result}")
+                # Get and store public URL
+                pdf_url = s3_service.get_public_url(f"pdfs/{property_id}/{filename}")
+                pdf_urls.append(pdf_url)
                 
-                # Step 3: Download PDF bytes from S3
-                pdf_bytes = s3_service.get_s3_file_buffer(pdf_s3_result)
+                # Step 3: Download PDF bytes from S3 (Blocking -> Threadpool)
+                # STRICT FLOW: Upload -> Download -> Extract
+                logger.info(f"Downloading PDF from S3: {f'pdfs/{property_id}/{filename}'}")
+                pdf_bytes = await run_in_threadpool(
+                    s3_service.get_file_from_s3,
+                    key=f"pdfs/{property_id}/{filename}"
+                )
                 
                 if not pdf_bytes:
                     logger.error(f"Failed to download PDF from S3: {filename}")
-                    continue
+                    continue 
                 
-                # Step 4: Extract images from PDF bytes
-                extraction_result = pdf_extractor.extract_images_from_bytes(
+                # Step 4: Extract images (CPU Intensive -> Threadpool)
+                extraction_result = await run_in_threadpool(
+                    pdf_extractor.extract_images_from_bytes,
                     pdf_bytes=pdf_bytes,
                     pdf_filename=filename,
-                    folder=f"extracted/{Path(filename).stem}"
+                    folder=f"extracted/{property_id}/{Path(filename).stem}" # Organize by property_id
                 )
                 
                 total_pages += extraction_result.get('total_pages', 0)
                 
-                # Step 5: Build response with extracted images
+                # Step 5: Build response
                 for img in extraction_result.get('images', []):
                     all_images.append(ExtractedImage(
                         filename=f"{filename}_{img['filename']}",
@@ -107,14 +123,31 @@ async def upload_pdfs(files: List[UploadFile] = File(...)):
             finally:
                 await file.close()
         
-        logger.info(f"Extracted {len(all_images)} images from {len(files)} PDF(s)")
+        # Step 6: Persist Property Data (Async)
+        property_data = PropertyData(
+            property_id=property_id,
+            user_id=user_id,
+            files=all_images,
+            pdf_urls=pdf_urls
+        )
+        
+        # Store in 'property_data' collection
+        await mongo.db["property_data"].update_one(
+            {"property_id": property_id},
+            {"$set": property_data.model_dump()},
+            upsert=True
+        )
+        
+        logger.info(f"Property {property_id} saved with {len(all_images)} images")
         
         response = PDFUploadResponse(
+            property_id=property_id,
             total_files=len(files),
             total_pages=total_pages,
             total_images=len(all_images),
             images=all_images,
-            message=f"Successfully extracted {len(all_images)} images from {len(files)} PDF(s)"
+            pdf_urls=pdf_urls,
+            message=f"Successfully extracted {len(all_images)} images"
         )
         
         return success_response(response.model_dump(), 200)

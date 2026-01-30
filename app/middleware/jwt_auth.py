@@ -1,7 +1,7 @@
 from fastapi import HTTPException, Request, FastAPI
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from loguru import logger
-from app.utils.token import JWTAuth
+from app.services.token import JWTAuth
 from app.utils.response import error_response
 
 # Paths that don't require authentication
@@ -9,9 +9,13 @@ PUBLIC_PATHS = [
     "/docs",  # Swagger UI
     "/redoc",  # ReDoc UI
     "/openapi.json",  # OpenAPI schema
-    "/token",  # Token generation endpoint
+    "/token",  # Token generation endpoint (legacy)
     "/health",  # Health check endpoint if you have one
-    "/auth/token",  # Token generation endpoint
+    "/auth/token",  # Token generation endpoint (legacy)
+    "/auth/login",  # User login endpoint
+    "/auth/register",
+    "/auth/refresh",
+    "/auth/logout",
 ]
 
 class JWTAuthMiddleware(BaseHTTPMiddleware):

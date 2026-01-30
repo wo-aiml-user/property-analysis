@@ -9,7 +9,8 @@ class Settings(BaseSettings):
     # JWT configuration
     JWT_SECRET_KEY: str = "your-secret-key-here"  # Change this in production!
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7  # Refresh token valid for 7 days
 
     # Server configuration
     HOST: str = "0.0.0.0"
@@ -26,13 +27,11 @@ class Settings(BaseSettings):
     # Environment-specific settings (for dynamic behavior)
     ENVIRONMENT: str = "development"  # Default to development
     
-    # Gemini API configuration
+    # OpenAI API configuration
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-image-1.5"
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash-image"
-    
-    # File storage configuration
-    UPLOAD_DIR: str = "uploads"
-    EXTRACTED_IMAGES_DIR: str = "extracted_images"
     
     # AWS S3 configuration
     AWS_ACCESS_KEY_ID: str = ""
@@ -41,9 +40,9 @@ class Settings(BaseSettings):
     AWS_BUCKET_NAME: str = ""
     
     # MongoDB configuration
-    MONGODB_URI: str = "mongodb://localhost:27017"
-    MONGODB_DB_NAME: str = "home_app"
-    MONGODB_COLLECTION_NAME: str = "users"
+    MONGODB_URI: str = ""
+    MONGODB_DB_NAME: str = ""
+    MONGODB_COLLECTION_NAME: str = ""
     
     class Config:
         env_file = ".env"  # Single .env file for all environments

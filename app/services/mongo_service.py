@@ -1,68 +1,97 @@
 """
-MongoDB Service for database operations.
+MongoDB Service for database operations (Async).
 """
 
-from pymongo import MongoClient
-from pymongo.database import Database
-from pymongo.collection import Collection
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from typing import Optional
 from loguru import logger
 from app.config import settings
-
+from datetime import datetime
+from passlib.context import CryptContext
 
 class MongoService:
-    """MongoDB connection and database operations."""
+    """Async MongoDB connection and database operations."""
+    
+    _instance: Optional['MongoService'] = None
     
     def __init__(self):
         """Initialize MongoDB client."""
-        self.client: Optional[MongoClient] = None
-        self.db: Optional[Database] = None
-        self._connect()
-    
-    def _connect(self):
+        self.client: Optional[AsyncIOMotorClient] = None
+        self.db: Optional[AsyncIOMotorDatabase] = None
+        
+    async def connect(self):
         """Establish connection to MongoDB."""
+        if self.client:
+            return
+
         try:
             if not settings.MONGODB_URI:
                 logger.warning("MONGODB_URI not configured - MongoDB operations will fail")
                 return
             
-            self.client = MongoClient(settings.MONGODB_URI)
+            # Connect to MongoDB
+            self.client = AsyncIOMotorClient(settings.MONGODB_URI)
             self.db = self.client[settings.MONGODB_DB_NAME]
             
             # Test connection
-            self.client.admin.command('ping')
-            logger.info(f"MongoDB connected to database: {settings.MONGODB_DB_NAME}")
+            await self.client.admin.command('ping')
+            logger.info("MongoDB connection successful")
+            
+            # Ensure indexes
+            await self._ensure_indexes()
+            
+            logger.info(f"MongoDB ready: {settings.MONGODB_DB_NAME}")
             
         except Exception as e:
             logger.error(f"Failed to connect to MongoDB: {e}")
             self.client = None
             self.db = None
+            
+    async def _ensure_indexes(self):
+        """Create necessary indexes."""
+        if self.db is None:
+            return
+            
+        try:
+            # Users collection indexes
+            users = self.db[settings.MONGODB_COLLECTION_NAME]
+            await users.create_index("email", unique=True)
+            
+            # Refresh tokens collection indexes - NEW
+            tokens = self.db["refresh_tokens"]
+            await tokens.create_index("token_hash", unique=True)
+            await tokens.create_index("user_id")
+            # Auto-expire tokens
+            await tokens.create_index("expires_at", expireAfterSeconds=0)
+            
+            logger.info("MongoDB indexes verified")
+        except Exception as e:
+            logger.error(f"Error creating indexes: {e}")
+
     
-    def get_collection(self, collection_name: str) -> Optional[Collection]:
+    def get_collection(self, collection_name: str): # -> AsyncIOMotorCollection
         """Get a MongoDB collection."""
-        if not self.db:
+        if self.db is None:
             logger.error("MongoDB database not initialized")
+            # Return a generic proxy or raise, but for now returning None might break callers not checking
+            # Ideally we should raise specific exception
             return None
         return self.db[collection_name]
     
-    def get_users_collection(self) -> Optional[Collection]:
+    def get_users_collection(self):
         """Get the users collection."""
         return self.get_collection(settings.MONGODB_COLLECTION_NAME)
-    
+
     def close(self):
         """Close MongoDB connection."""
         if self.client:
             self.client.close()
             logger.info("MongoDB connection closed")
 
-
-# Singleton instance
-_mongo_service: Optional[MongoService] = None
-
-
-def get_mongo_service() -> MongoService:
-    """Get or create the MongoDB service singleton."""
-    global _mongo_service
-    if _mongo_service is None:
-        _mongo_service = MongoService()
-    return _mongo_service
+# Singleton accessor
+async def get_mongo_service() -> MongoService:
+    """Get the MongoDB service singleton, initializing connection if needed."""
+    if MongoService._instance is None:
+        MongoService._instance = MongoService()
+        await MongoService._instance.connect()
+    return MongoService._instance

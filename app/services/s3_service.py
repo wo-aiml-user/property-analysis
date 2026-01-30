@@ -92,6 +92,13 @@ class S3Service:
             logger.error(f"Unexpected error uploading to S3: {e}")
             return None
     
+    def get_file_from_s3(self, key: str) -> Optional[bytes]:
+        """
+        Download file from S3 and return as bytes.
+        Alias for get_s3_file_buffer for clearer naming.
+        """
+        return self.get_s3_file_buffer(key)
+
     def get_s3_file_buffer(
         self,
         key: str,

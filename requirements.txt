@@ -1,29 +1,28 @@
 # FastAPI core
-fastapi==0.115.8
-uvicorn[standard]==0.34.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
 
 # Configuration & Logging
-pydantic-settings==2.7.1
-python-dotenv==1.0.0
-loguru==0.7.3
+pydantic-settings
+python-dotenv
+loguru
 
 # Authentication
-python-jose[cryptography]==3.3.0
-python-multipart==0.0.20
-passlib[bcrypt]>=1.7.4
+passlib[bcrypt]
+bcrypt==3.2.2
+python-jose[cryptography]
+python-multipart
+email-validator
 
 # Database
-pymongo>=4.6.0
+motor # Async MongoDB
 
 # PDF Processing
-pdfplumber==0.11.9
-Pillow>=12.0.0
+pdfplumber
+Pillow
 
-# Google Gemini AI
-google-genai
+# AI & LLM
+openai
 
 # AWS S3
-boto3>=1.35.0
-
-# HTTP client (for downloading images)
-requests>=2.28.0
+boto3
