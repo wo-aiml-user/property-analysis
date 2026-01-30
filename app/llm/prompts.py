@@ -3,7 +3,7 @@ LLM Prompts for Property Analysis.
 Contains only the image regeneration prompt.
 """
 
-IMAGE_REGENERATION_PROMPT = """You are an expert interior designer and renovation consultant.
+image_regeneration_prompt = """You are an expert interior designer and renovation consultant.
 Analyze these property images and regenerate them based on the user's feedback.
 
 User Feedback: {user_feedback}

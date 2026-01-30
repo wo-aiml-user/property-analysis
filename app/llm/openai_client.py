@@ -9,7 +9,7 @@ import base64
 import io
 from loguru import logger
 from app.config import settings
-from app.llm.prompts import IMAGE_REGENERATION_PROMPT
+from app.llm.prompts import image_regeneration_prompt
 from app.services.s3_service import get_s3_service
 
 class OpenAIClient:
@@ -72,7 +72,7 @@ class OpenAIClient:
         Regenerate images based on user feedback using OpenAI.
         """
         try:
-            prompt = IMAGE_REGENERATION_PROMPT.format(user_feedback=user_feedback)
+            prompt = image_regeneration_prompt.format(user_feedback=user_feedback)
             
             # Prepare images as file-like objects (BytesIO)
             image_files = []
@@ -140,12 +140,14 @@ class OpenAIClient:
                                 "mime_type": mime_type
                             })
                     elif hasattr(item, 'url') and item.url:
-                         generated_images.append({
+                        generated_images.append({
                             "url": item.url,
                             "mime_type": "image/png"
                         })
                         
             logger.info(f"OpenAI generated {len(generated_images)} images")
+            
+            description = "Regenerated images based on your feedback."
             
             return {
                 "regenerated_images": generated_images,

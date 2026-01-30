@@ -12,7 +12,7 @@ import base64
 import io
 from loguru import logger
 from app.config import settings
-from app.llm.prompts import IMAGE_REGENERATION_PROMPT
+from app.llm.prompts import image_regeneration_prompt
 from app.services.s3_service import get_s3_service
 
 
@@ -102,7 +102,7 @@ class GeminiClient:
             Dict with regenerated images (S3 URLs if uploaded, base64 otherwise)
         """
         try:
-            prompt = IMAGE_REGENERATION_PROMPT.format(user_feedback=user_feedback)
+            prompt = image_regeneration_prompt.format(user_feedback=user_feedback)
             contents = [prompt]
             
             for img in images:

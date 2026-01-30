@@ -2,19 +2,25 @@
 Chat Controller - Image regeneration endpoint.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
 from loguru import logger
+from datetime import datetime
 
 from app.utils.response import success_response, error_response
 from app.model.chat_model import ChatRequest, ChatResponse, RegeneratedImage
 from app.llm.openai_client import get_openai_client
+from app.services.mongo_service import get_mongo_service, MongoService
 
 
 router = APIRouter()
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def regenerate_images(request: ChatRequest):
+async def regenerate_images(
+    request_body: ChatRequest,
+    request: Request,
+    mongo: MongoService = Depends(get_mongo_service)
+):
     """
     Accept image URLs (from /doc/upload) and user feedback, regenerate images using OpenAI.
     
@@ -34,14 +40,30 @@ async def regenerate_images(request: ChatRequest):
     - description: Text description from the model
     - input_count: Number of input images processed
     """
-    if not request.images:
+    if not request_body.images:
         return error_response("At least one image is required", 400)
     
-    if not request.user_feedback.strip():
+    if not request_body.user_feedback.strip():
         return error_response("User feedback is required", 400)
+
+    # 1. Authentication & Ownership Check
+    if not hasattr(request.state, "jwt_payload") or not request.state.jwt_payload:
+        return error_response("Authentication required", 401)
+        
+    user_id = request.state.jwt_payload.get("user_id")
+    property_id = request_body.property_id
+    
+    # Check property ownership
+    property_doc = await mongo.db["property_data"].find_one({
+        "property_id": property_id,
+        "user_id": user_id
+    })
+    
+    if not property_doc:
+        return error_response("Property not found or access denied", 404)
     
     # Filter valid images (must have url, s3_key, or data)
-    valid_images = [img for img in request.images if img.url or img.s3_key or img.data]
+    valid_images = [img for img in request_body.images if img.url or img.s3_key or img.data]
     if not valid_images:
         return error_response("At least one image must have a URL or base64 data", 400)
     
@@ -55,11 +77,10 @@ async def regenerate_images(request: ChatRequest):
             for img in valid_images
         ]
         
-        # Use simple await if the method is async, but OpenAI's sync client might block.
-        # However, I defined regenerate_images as 'async def' in my client.
+
         result = await client.regenerate_images(
             images=images_data,
-            user_feedback=request.user_feedback,
+            user_feedback=request_body.user_feedback,
             upload_to_s3=True
         )
         
@@ -81,6 +102,25 @@ async def regenerate_images(request: ChatRequest):
             description=result.get("description", ""),
             input_count=result.get("input_count", len(valid_images)),
             message=f"Successfully regenerated {len(regenerated)} image(s)"
+        )
+        
+        # Save Chat History (Async)
+        chat_entry = {
+            "timestamp": datetime.utcnow(),
+            "role": "user",
+            "content": request_body.user_feedback
+        }
+        
+        response_entry = {
+            "timestamp": datetime.utcnow(),
+            "role": "assistant",
+            "images": [img.model_dump() for img in regenerated],
+            "description": result.get("description", "")
+        }
+        
+        await mongo.db["property_data"].update_one(
+            {"property_id": property_id},
+            {"$push": {"chat_history": {"$each": [chat_entry, response_entry]}}}
         )
         
         return success_response(response.model_dump(), 200)

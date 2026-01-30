@@ -4,13 +4,13 @@ Workflow: Upload PDF to S3 -> Download bytes -> Extract images -> Upload images 
 """
 
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, UploadFile, File, Form, Depends, Request, HTTPException
 from loguru import logger
 from starlette.concurrency import run_in_threadpool
 
 from app.utils.response import success_response, error_response
-from app.model.doc_model import PDFUploadResponse, ExtractedImage, PropertyData
+from app.model.doc_model import PDFUploadResponse, ExtractedImage, PropertyData, ProjectSummary
 from app.services.pdf_extractor import get_pdf_extractor
 from app.services.s3_service import get_s3_service
 from app.services.mongo_service import get_mongo_service, MongoService
@@ -155,3 +155,50 @@ async def upload_pdfs(
     except Exception as e:
         logger.error(f"Error processing PDFs: {e}")
         return error_response(f"Error processing PDFs: {str(e)}", 500)
+
+@router.get("/projects", response_model=List[PropertyData])
+async def get_projects(request: Request, mongo: MongoService = Depends(get_mongo_service)):
+    """List all projects for the authenticated user (Full Schema)."""
+    if not hasattr(request.state, "jwt_payload") or not request.state.jwt_payload:
+        return error_response("Authentication required", 401)
+        
+    user_id = request.state.jwt_payload.get("user_id")
+    if not user_id:
+        return error_response("Invalid user session", 401)
+        
+    try:
+        cursor = mongo.db["property_data"].find({"user_id": user_id}).sort("created_at", -1)
+        projects = []
+        
+        async for doc in cursor:
+            projects.append(PropertyData(**doc))
+            
+        return projects
+    except Exception as e:
+        logger.error(f"Error fetching projects: {e}")
+        return error_response("Failed to fetch projects", 500)
+
+@router.get("/{property_id}", response_model=PropertyData)
+async def get_project(property_id: str, request: Request, mongo: MongoService = Depends(get_mongo_service)):
+    """Get full details for a specific property."""
+    if not hasattr(request.state, "jwt_payload") or not request.state.jwt_payload:
+        return error_response("Authentication required", 401)
+        
+    user_id = request.state.jwt_payload.get("user_id")
+    if not user_id:
+        return error_response("Invalid user session", 401)
+        
+    try:
+        doc = await mongo.db["property_data"].find_one({
+            "property_id": property_id,
+            "user_id": user_id
+        })
+        
+        if not doc:
+            return error_response("Project not found", 404)
+            
+        return success_response(PropertyData(**doc))
+        
+    except Exception as e:
+        logger.error(f"Error fetching project {property_id}: {e}")
+        return error_response("Failed to fetch project details", 500)

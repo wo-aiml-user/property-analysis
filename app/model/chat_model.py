@@ -16,6 +16,7 @@ class ImageInput(BaseModel):
 
 class ChatRequest(BaseModel):
     """Request model for image regeneration chat."""
+    property_id: str = Field(..., description="ID of the property being edited")
     images: List[ImageInput] = Field(..., description="List of images (URLs from /doc/upload)")
     user_feedback: str = Field(..., description="User's regeneration preferences and feedback")
 

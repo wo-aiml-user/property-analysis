@@ -31,4 +31,11 @@ class PropertyData(BaseModel):
     files: List[ExtractedImage]
     pdf_urls: List[str] = []
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    chat_history: List[Dict[str, Any]] = [] # To store chat messages
+    chat_history: List[Dict[str, Any]] = [] # To store user's chat messages
+
+class ProjectSummary(BaseModel):
+    """Summary of a property project for the portfolio list."""
+    property_id: str
+    created_at: datetime
+    total_images: int
+    thumbnail_url: Optional[str] = None
