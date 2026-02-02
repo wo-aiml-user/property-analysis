@@ -54,6 +54,7 @@ class UserResponse(BaseModel):
 class TokenResponse(BaseModel):
     """Token response model."""
     access_token: str
+    refresh_token: Optional[str] = None
     token_type: str = "bearer"
     expires_in: int = Field(default=3600, description="Access token expiry in seconds")
 

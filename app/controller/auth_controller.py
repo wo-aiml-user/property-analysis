@@ -108,7 +108,11 @@ async def login(response: Response, request: UserLogin, user_agent: Optional[str
             max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
         )
         
-        return success_response(TokenResponse(access_token=access_token))
+        return success_response(TokenResponse(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        ))
         
     except Exception as e:
         logger.error(f"Login error: {e}")
@@ -181,7 +185,7 @@ async def refresh_token(
         new_refresh_doc = {
             "user_id": stored_token["user_id"],
             "token_hash": new_refresh_hash,
-            "family_id": stored_token["family_id"], # Keep same family
+            "family_id": stored_token["family_id"],
             "created_at": datetime.utcnow(),
             "expires_at": datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
             "revoked": False,
