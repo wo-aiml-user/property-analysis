@@ -15,7 +15,7 @@ from app.services.mongo_service import get_mongo_service, MongoService
 router = APIRouter()
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/regenerate", response_model=ChatResponse)
 async def regenerate_images(
     request_body: ChatRequest,
     request: Request,
