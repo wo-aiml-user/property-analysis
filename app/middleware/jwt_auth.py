@@ -16,6 +16,7 @@ PUBLIC_PATHS = [
     "/auth/register",
     "/auth/refresh",
     "/auth/logout",
+    "/doc/image/",  # Image serving endpoint (verifies ownership internally)
 ]
 
 class JWTAuthMiddleware(BaseHTTPMiddleware):

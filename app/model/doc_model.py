@@ -8,10 +8,11 @@ from datetime import datetime
 
 class ExtractedImage(BaseModel):
     """Model for an extracted image from PDF."""
+    id: str = ""  # Unique identifier (empty for legacy data, will be generated on-the-fly)
     filename: str
     page: int
     caption: str = ""
-    url: str  # S3 public URL
+    url: str  # S3 public URL (internal use, not exposed to frontend)
     mime_type: str = "image/png"
 
 class PDFUploadResponse(BaseModel):
@@ -39,3 +40,20 @@ class ProjectSummary(BaseModel):
     created_at: datetime
     total_images: int
     thumbnail_url: Optional[str] = None
+
+class ExtractedImageResponse(BaseModel):
+    """Response model for extracted image (excludes S3 URL)."""
+    id: str
+    filename: str
+    page: int
+    caption: str = ""
+    mime_type: str = "image/png"
+
+class PropertyDataResponse(BaseModel):
+    """Response model for property data (excludes S3 URLs from images)."""
+    property_id: str
+    user_id: str
+    files: List[ExtractedImageResponse]
+    pdf_urls: List[str] = []
+    created_at: datetime
+    chat_history: List[Dict[str, Any]] = []

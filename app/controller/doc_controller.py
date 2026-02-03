@@ -8,7 +8,7 @@ from typing import List, Optional
 from fastapi import APIRouter, UploadFile, File, Form, Depends, Request, HTTPException
 from loguru import logger
 from starlette.concurrency import run_in_threadpool
-
+import uuid
 from app.utils.response import success_response, error_response
 from app.model.doc_model import PDFUploadResponse, ExtractedImage, PropertyData, ProjectSummary
 from app.services.pdf_extractor import get_pdf_extractor
@@ -109,7 +109,9 @@ async def upload_pdfs(
                 
                 # Step 5: Build response
                 for img in extraction_result.get('images', []):
+                    image_id = uuid.uuid4().hex  # Generate unique ID
                     all_images.append(ExtractedImage(
+                        id=image_id,
                         filename=f"{filename}_{img['filename']}",
                         page=img['page'],
                         caption=img.get('caption', ''),
@@ -171,6 +173,20 @@ async def get_projects(request: Request, mongo: MongoService = Depends(get_mongo
         projects = []
         
         async for doc in cursor:
+            # Migration: Generate IDs for files that don't have them
+            needs_update = False
+            for file_data in doc.get("files", []):
+                if not file_data.get("id"):
+                    file_data["id"] = uuid.uuid4().hex
+                    needs_update = True
+            
+            # Update document if IDs were generated
+            if needs_update:
+                await mongo.db["property_data"].update_one(
+                    {"_id": doc["_id"]},
+                    {"$set": {"files": doc["files"]}}
+                )
+            
             projects.append(PropertyData(**doc))
             
         return projects
@@ -178,7 +194,7 @@ async def get_projects(request: Request, mongo: MongoService = Depends(get_mongo
         logger.error(f"Error fetching projects: {e}")
         return error_response("Failed to fetch projects", 500)
 
-@router.get("/{property_id}", response_model=PropertyData)
+@router.get("/{property_id}")
 async def get_project(property_id: str, request: Request, mongo: MongoService = Depends(get_mongo_service)):
     """Get full details for a specific property."""
     if not hasattr(request.state, "jwt_payload") or not request.state.jwt_payload:
@@ -196,9 +212,58 @@ async def get_project(property_id: str, request: Request, mongo: MongoService = 
         
         if not doc:
             return error_response("Project not found", 404)
+        
+        # Convert to PropertyData to validate, then to response model
+        property_data = PropertyData(**doc)
+        
+        # Create response without S3 URLs
+        from app.model.doc_model import PropertyDataResponse, ExtractedImageResponse
+        response = PropertyDataResponse(
+            property_id=property_data.property_id,
+            user_id=property_data.user_id,
+            files=[
+                ExtractedImageResponse(
+                    id=img.id,
+                    filename=img.filename,
+                    page=img.page,
+                    caption=img.caption,
+                    mime_type=img.mime_type
+                ) for img in property_data.files
+            ],
+            pdf_urls=property_data.pdf_urls,
+            created_at=property_data.created_at,
+            chat_history=property_data.chat_history
+        )
             
-        return success_response(PropertyData(**doc))
+        return success_response(response.model_dump())
         
     except Exception as e:
         logger.error(f"Error fetching project {property_id}: {e}")
         return error_response("Failed to fetch project details", 500)
+
+@router.get("/image/{image_id}")
+async def get_image(image_id: str, mongo: MongoService = Depends(get_mongo_service)):
+    """Serve an image by ID (redirect to S3 URL). Public endpoint but verifies image exists."""
+    try:
+        # Find the property that contains this image (no user_id filter since it's public)
+        from fastapi.responses import RedirectResponse
+        property_doc = await mongo.db["property_data"].find_one({
+            "files.id": image_id
+        })
+        
+        if not property_doc:
+            return error_response("Image not found", 404)
+        
+        # Find the specific image
+        property_data = PropertyData(**property_doc)
+        image = next((img for img in property_data.files if img.id == image_id), None)
+        
+        if not image:
+            return error_response("Image not found", 404)
+        
+        # Redirect to S3 URL
+        return RedirectResponse(url=image.url)
+        
+    except Exception as e:
+        logger.error(f"Error fetching image {image_id}: {e}")
+        return error_response("Failed to fetch image", 500)

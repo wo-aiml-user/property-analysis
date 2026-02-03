@@ -80,7 +80,12 @@ def get_settings():
     else:
         settings.DEBUG = True
         settings.LOG_LEVEL = "DEBUG"
-        settings.CORS_ORIGINS = ["*"]  # Allow all origins for development
+        settings.CORS_ORIGINS = [
+            "http://localhost:5173",
+            "http://localhost:5174",
+            "http://localhost:3000",
+            "http://localhost:8000"
+        ]  # Specific origins for development with credentials
     
     return settings
 

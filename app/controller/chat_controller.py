@@ -5,6 +5,7 @@ Chat Controller - Image regeneration endpoint.
 from fastapi import APIRouter, Depends, Request
 from loguru import logger
 from datetime import datetime
+from app.model.doc_model import PropertyData
 
 from app.utils.response import success_response, error_response
 from app.model.chat_model import ChatRequest, ChatResponse, RegeneratedImage
@@ -22,17 +23,18 @@ async def regenerate_images(
     mongo: MongoService = Depends(get_mongo_service)
 ):
     """
-    Accept image URLs (from /doc/upload) and user feedback, regenerate images using OpenAI.
+    Accept image IDs and user feedback, lookup S3 URLs, regenerate images using OpenAI.
     
     Flow:
-    1. Frontend sends image URLs (from PDF extraction)
-    2. Backend downloads images from S3 (URL -> bytes)
-    3. Sends to OpenAI model for regeneration
-    4. Uploads regenerated images to S3
-    5. Returns new S3 URLs
+    1. Frontend sends image IDs (not URLs)
+    2. Backend looks up image IDs in MongoDB to get S3 URLs
+    3. Downloads images from S3 (URL -> bytes)
+    4. Sends to OpenAI model for regeneration
+    5. Uploads regenerated images to S3
+    6. Returns new S3 URLs
     
     Parameters:
-    - images: List of images with 'url' (S3 Object URL from /doc/upload)
+    - image_ids: List of image IDs to regenerate
     - user_feedback: User's preferences for how to regenerate the images
     
     Returns:
@@ -40,8 +42,8 @@ async def regenerate_images(
     - description: Text description from the model
     - input_count: Number of input images processed
     """
-    if not request_body.images:
-        return error_response("At least one image is required", 400)
+    if not request_body.image_ids:
+        return error_response("At least one image ID is required", 400)
     
     if not request_body.user_feedback.strip():
         return error_response("User feedback is required", 400)
@@ -62,19 +64,31 @@ async def regenerate_images(
     if not property_doc:
         return error_response("Property not found or access denied", 404)
     
-    # Filter valid images (must have url, s3_key, or data)
-    valid_images = [img for img in request_body.images if img.url or img.s3_key or img.data]
-    if not valid_images:
-        return error_response("At least one image must have a URL or base64 data", 400)
+    # 2. Lookup image IDs to get S3 URLs
+    property_data = PropertyData(**property_doc)
+    
+    # Create a mapping of image ID -> S3 URL
+    image_map = {img.id: img.url for img in property_data.files}
+    
+    # Get S3 URLs for requested image IDs
+    image_urls = []
+    for img_id in request_body.image_ids:
+        if img_id not in image_map:
+            logger.warning(f"Image ID {img_id} not found in property {property_id}")
+            continue
+        image_urls.append(image_map[img_id])
+    
+    if not image_urls:
+        return error_response("No valid images found for the provided IDs", 400)
     
     try:
         # Use OpenAI Client
         client = get_openai_client()
         
-        # Prepare image data
+        # Prepare image data with URLs
         images_data = [
-            {"url": img.url, "s3_key": img.s3_key, "data": img.data, "mime_type": img.mime_type}
-            for img in valid_images
+            {"url": url, "mime_type": "image/png"}
+            for url in image_urls
         ]
         
 
@@ -100,7 +114,7 @@ async def regenerate_images(
         response = ChatResponse(
             regenerated_images=regenerated,
             description=result.get("description", ""),
-            input_count=result.get("input_count", len(valid_images)),
+            input_count=result.get("input_count", len(image_urls)),
             message=f"Successfully regenerated {len(regenerated)} image(s)"
         )
         
@@ -108,7 +122,8 @@ async def regenerate_images(
         chat_entry = {
             "timestamp": datetime.utcnow(),
             "role": "user",
-            "content": request_body.user_feedback
+            "content": request_body.user_feedback,
+            "image_ids": request_body.image_ids  # Store IDs instead of URLs
         }
         
         response_entry = {
