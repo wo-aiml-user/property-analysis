@@ -1,35 +1,70 @@
 """
-Document Controller - PDF upload and image extraction.
-Workflow: Upload PDF to S3 -> Download bytes -> Extract images -> Upload images to S3
+Document Controller - PDF upload, image extraction, and property management.
 """
 
 from pathlib import Path
 from typing import List, Optional
-from fastapi import APIRouter, UploadFile, File, Form, Depends, Request, HTTPException
+import re
+from fastapi import APIRouter, UploadFile, File, Form, Depends, Request, HTTPException, Body
 from loguru import logger
 from starlette.concurrency import run_in_threadpool
 import uuid
 from app.utils.response import success_response, error_response
-from app.model.doc_model import PDFUploadResponse, ExtractedImage, PropertyData, ProjectSummary
-from app.services.pdf_extractor import get_pdf_extractor
-from app.services.s3_service import get_s3_service
+from app.model.doc_model import (
+    PDFUploadResponse, ExtractedImage, PropertyData, ProjectSummary, 
+    FileType, ImageCategory, PropertyDataResponse, ExtractedImageResponse
+)
+from app.services.pdf_extractor import get_pdf_extractor, PDFExtractor
+from app.services.s3_service import get_s3_service, S3Service
 from app.services.mongo_service import get_mongo_service, MongoService
 
 router = APIRouter()
+
+# Category patterns for regex-based matching
+CATEGORY_PATTERNS = [
+    (r'\b(kitchen|chef\'?s?\s*kitchen|galley|pantry)\b', 'kitchen'),
+    (r'\b(living\s*room|family\s*room|great\s*room|lounge|den)\b', 'living_room'),
+    (r'\b(bedroom|bed\s*room|master\s*bed|guest\s*bed|primary\s*bed)\b', 'bedroom'),
+    (r'\b(bathroom|bath\s*room|bath|powder\s*room|ensuite|en-suite|primary\s*bath|master\s*bath|half\s*bath|full\s*bath)\b', 'bathroom'),
+    (r'\b(exterior|outdoor|outside|facade|front\s*yard|back\s*yard|backyard|frontyard|patio|deck|pool|garden|landscap|driveway|garage\s*exterior)\b', 'exterior'),
+    (r'\b(dining\s*room|dining|breakfast\s*nook|eat-in)\b', 'dining_room'),
+    (r'\b(garage|car\s*port|carport)\b', 'garage'),
+    (r'\b(office|study|home\s*office|workspace)\b', 'office'),
+    (r'\b(laundry|utility\s*room|mud\s*room|mudroom)\b', 'laundry'),
+    (r'\b(basement|cellar)\b', 'basement'),
+    (r'\b(attic|loft)\b', 'attic'),
+    (r'\b(entry|foyer|entryway|hallway|corridor|staircase|stairs)\b', 'entry'),
+    (r'\b(closet|walk-in|wardrobe)\b', 'closet'),
+]
+
+def category_from_caption(caption: str) -> str:
+    """
+    Determine category from caption using regex pattern matching.
+    Returns the first matching category or 'uncategorized' if no match.
+    """
+    if not caption:
+        return 'uncategorized'
+    
+    caption_lower = caption.lower().strip()
+    
+    for pattern, category in CATEGORY_PATTERNS:
+        if re.search(pattern, caption_lower, re.IGNORECASE):
+            return category
+    
+    return 'uncategorized'
 
 @router.post("/upload", response_model=PDFUploadResponse)
 async def upload_pdfs(
     request: Request,
     property_id: str = Form(...),
     files: List[UploadFile] = File(...),
-    mongo: MongoService = Depends(get_mongo_service)
+    file_type: FileType = Form(FileType.MLS),
+    mongo: MongoService = Depends(get_mongo_service),
+    s3: S3Service = Depends(get_s3_service),
+    pdf_extractor: PDFExtractor = Depends(get_pdf_extractor)
 ):
     """
-    Upload multiple PDF files, extract images, and create a property session.
-    
-    Parameters:
-    - property_id: Unique ID for the property (frontend generated)
-    - files: List of PDF files
+    Upload multiple PDF files, extract images, and create/update a property session.
     """
     # 1. Authentication Check
     if not hasattr(request.state, "jwt_payload") or not request.state.jwt_payload:
@@ -40,24 +75,18 @@ async def upload_pdfs(
         return error_response("Invalid user session", 401)
 
     # Validate files
-    logger.info(f"Received {len(files)} files")
+    logger.info(f"Received {len(files)} files for property {property_id} as {file_type}")
     for file in files:
-        logger.info(f"Checking file: '{file.filename}' (ContentType: {file.content_type})")
         if not file.filename:
-            # Skip empty entries if any
             continue
-            
         if not file.filename.lower().endswith('.pdf'):
-            return JSONResponse(content={"error": f"Only PDF files are allowed. Got: {file.filename}"}, status_code=400)
+            return error_response(f"Only PDF files are allowed. Got: {file.filename}", 400)
     
     all_images = []
     pdf_urls = []
     total_pages = 0
     
     try:
-        s3_service = get_s3_service()
-        pdf_extractor = get_pdf_extractor()
-        
         for file in files:
             if not file.filename:
                 continue
@@ -65,15 +94,14 @@ async def upload_pdfs(
             logger.info(f"Processing PDF: {filename}")
             
             try:
-                # Step 1: Read file content (Async IO)
+                # Step 1: Read file content
                 file_content = await file.read()
                 
-                # Step 2: Upload PDF to S3 (Blocking -> Threadpool)
-                # Note: S3 upload can be slow, better to offload
+                # Step 2: Upload PDF to S3
                 pdf_s3_result = await run_in_threadpool(
-                    s3_service.upload_file_to_s3,
+                    s3.upload_file_to_s3,
                     buffer=file_content,
-                    key=f"pdfs/{property_id}/{filename}", # Organize by property_id
+                    key=f"pdfs/{property_id}/{filename}",
                     content_type="application/pdf"
                 )
                 
@@ -81,42 +109,35 @@ async def upload_pdfs(
                     logger.error(f"Failed to upload PDF to S3: {filename}")
                     continue
                 
-                # Get and store public URL
-                pdf_url = s3_service.get_public_url(f"pdfs/{property_id}/{filename}")
+                # Get public URL
+                pdf_url = s3.get_public_url(f"pdfs/{property_id}/{filename}")
                 pdf_urls.append(pdf_url)
                 
-                # Step 3: Download PDF bytes from S3 (Blocking -> Threadpool)
-                # STRICT FLOW: Upload -> Download -> Extract
-                logger.info(f"Downloading PDF from S3: {f'pdfs/{property_id}/{filename}'}")
-                pdf_bytes = await run_in_threadpool(
-                    s3_service.get_file_from_s3,
-                    key=f"pdfs/{property_id}/{filename}"
-                )
-                
-                if not pdf_bytes:
-                    logger.error(f"Failed to download PDF from S3: {filename}")
-                    continue 
-                
-                # Step 4: Extract images (CPU Intensive -> Threadpool)
+                # Step 3: Extract images
                 extraction_result = await run_in_threadpool(
                     pdf_extractor.extract_images_from_bytes,
-                    pdf_bytes=pdf_bytes,
+                    pdf_bytes=file_content,
                     pdf_filename=filename,
-                    folder=f"extracted/{property_id}/{Path(filename).stem}" # Organize by property_id
+                    folder=f"extracted/{property_id}/{Path(filename).stem}"
                 )
                 
                 total_pages += extraction_result.get('total_pages', 0)
                 
-                # Step 5: Build response
+                # Step 4: Build image models
                 for img in extraction_result.get('images', []):
-                    image_id = uuid.uuid4().hex  # Generate unique ID
+                    image_id = uuid.uuid4().hex
+                    caption = img.get('caption', '').strip()
+                    # Use regex-based pattern matching to categorize based on caption keywords
+                    category = category_from_caption(caption)
                     all_images.append(ExtractedImage(
                         id=image_id,
                         filename=f"{filename}_{img['filename']}",
                         page=img['page'],
-                        caption=img.get('caption', ''),
+                        caption=caption,
                         url=img['url'],
-                        mime_type=img.get('mime_type', 'image/png')
+                        mime_type=img.get('mime_type', 'image/png'),
+                        file_type=file_type,
+                        category=category
                     ))
                 
             except Exception as e:
@@ -125,22 +146,38 @@ async def upload_pdfs(
             finally:
                 await file.close()
         
-        # Step 6: Persist Property Data (Async)
-        property_data = PropertyData(
-            property_id=property_id,
-            user_id=user_id,
-            files=all_images,
-            pdf_urls=pdf_urls
-        )
+        # Step 5: Persist Property Data (Upsert to add to existing property if exists)
+        # We need to add new images to existing list if property exists
         
-        # Store in 'property_data' collection
-        await mongo.db["property_data"].update_one(
-            {"property_id": property_id},
-            {"$set": property_data.model_dump()},
-            upsert=True
-        )
+        existing_doc = await mongo.db["property_data"].find_one({"property_id": property_id, "user_id": user_id})
         
-        logger.info(f"Property {property_id} saved with {len(all_images)} images")
+        if existing_doc:
+            # Append new images and pdfs
+            await mongo.db["property_data"].update_one(
+                {"property_id": property_id},
+                {
+                    "$push": {
+                        "files": {"$each": [img.model_dump() for img in all_images]},
+                        "pdf_urls": {"$each": pdf_urls}
+                    }
+                }
+            )
+            # Combine for response
+            # Note: Response will only show newly uploaded images for now to keep payload light?
+            # Or return full state? The response model implies full state or session state.
+            # Let's return just what was processed + context
+            
+        else:
+            # Create new
+            property_data = PropertyData(
+                property_id=property_id,
+                user_id=user_id,
+                files=all_images,
+                pdf_urls=pdf_urls
+            )
+            await mongo.db["property_data"].insert_one(property_data.model_dump())
+        
+        logger.info(f"Property {property_id} updated with {len(all_images)} new images")
         
         response = PDFUploadResponse(
             property_id=property_id,
@@ -158,9 +195,41 @@ async def upload_pdfs(
         logger.error(f"Error processing PDFs: {e}")
         return error_response(f"Error processing PDFs: {str(e)}", 500)
 
+@router.put("/image/{property_id}/{image_id}/category")
+async def update_image_category(
+    property_id: str, 
+    image_id: str, 
+    payload: dict = Body(...),
+    request: Request = None,
+    mongo: MongoService = Depends(get_mongo_service)
+):
+    """Update the category of a specific image."""
+    if not hasattr(request.state, 'jwt_payload'):
+        return error_response("Authentication required", 401)
+    
+    category = payload.get("category")
+    if not category:
+        return error_response("Category is required", 400)
+        
+    try:
+        # Update specific item in array
+        result = await mongo.db["property_data"].update_one(
+            {"property_id": property_id, "files.id": image_id},
+            {"$set": {"files.$.category": category}}
+        )
+        
+        if result.modified_count == 0:
+            return error_response("Image not found or category unchanged", 404)
+            
+        return success_response({"message": "Category updated", "category": category})
+        
+    except Exception as e:
+        logger.error(f"Error updating category: {e}")
+        return error_response("Failed to update category", 500)
+
 @router.get("/projects", response_model=List[PropertyData])
 async def get_projects(request: Request, mongo: MongoService = Depends(get_mongo_service)):
-    """List all projects for the authenticated user (Full Schema)."""
+    """List all projects for the authenticated user."""
     if not hasattr(request.state, "jwt_payload") or not request.state.jwt_payload:
         return error_response("Authentication required", 401)
         
@@ -171,24 +240,8 @@ async def get_projects(request: Request, mongo: MongoService = Depends(get_mongo
     try:
         cursor = mongo.db["property_data"].find({"user_id": user_id}).sort("created_at", -1)
         projects = []
-        
         async for doc in cursor:
-            # Migration: Generate IDs for files that don't have them
-            needs_update = False
-            for file_data in doc.get("files", []):
-                if not file_data.get("id"):
-                    file_data["id"] = uuid.uuid4().hex
-                    needs_update = True
-            
-            # Update document if IDs were generated
-            if needs_update:
-                await mongo.db["property_data"].update_one(
-                    {"_id": doc["_id"]},
-                    {"$set": {"files": doc["files"]}}
-                )
-            
             projects.append(PropertyData(**doc))
-            
         return projects
     except Exception as e:
         logger.error(f"Error fetching projects: {e}")
@@ -196,14 +249,14 @@ async def get_projects(request: Request, mongo: MongoService = Depends(get_mongo
 
 @router.get("/{property_id}")
 async def get_project(property_id: str, request: Request, mongo: MongoService = Depends(get_mongo_service)):
-    """Get full details for a specific property."""
+    """Get filtered details for a specific property (separates MLS vs Comps)."""
+    logger.debug(f"GET /doc/{property_id} - Checking Auth")
+    
     if not hasattr(request.state, "jwt_payload") or not request.state.jwt_payload:
         return error_response("Authentication required", 401)
         
     user_id = request.state.jwt_payload.get("user_id")
-    if not user_id:
-        return error_response("Invalid user session", 401)
-        
+    
     try:
         doc = await mongo.db["property_data"].find_one({
             "property_id": property_id,
@@ -213,29 +266,39 @@ async def get_project(property_id: str, request: Request, mongo: MongoService = 
         if not doc:
             return error_response("Project not found", 404)
         
-        # Convert to PropertyData to validate, then to response model
-        property_data = PropertyData(**doc)
+        files = doc.get("files", [])
+        mls_images = []
+        comps_images = []
         
-        # Create response without S3 URLs
-        from app.model.doc_model import PropertyDataResponse, ExtractedImageResponse
-        response = PropertyDataResponse(
-            property_id=property_data.property_id,
-            user_id=property_data.user_id,
-            files=[
-                ExtractedImageResponse(
-                    id=img.id,
-                    filename=img.filename,
-                    page=img.page,
-                    caption=img.caption,
-                    mime_type=img.mime_type
-                ) for img in property_data.files
-            ],
-            pdf_urls=property_data.pdf_urls,
-            created_at=property_data.created_at,
-            chat_history=property_data.chat_history
-        )
+        for img in files:
+            # Map to response format (exclude internal S3 URL if needed, but ExtractedImage has it)
+            # Use public endpoints for frontend
+            img_response = {
+                "id": img.get("id"),
+                "filename": img.get("filename"),
+                "page": img.get("page"),
+                "caption": img.get("caption", ""),
+                "mime_type": img.get("mime_type"),
+                "file_type": img.get("file_type", FileType.MLS.value),
+                "category": img.get("category", ImageCategory.UNCATEGORIZED.value)
+            }
             
-        return success_response(response.model_dump())
+            if img_response["file_type"] == FileType.MLS.value:
+                mls_images.append(img_response)
+            else:
+                comps_images.append(img_response)
+        
+        response = {
+            "property_id": doc["property_id"],
+            "user_id": doc["user_id"],
+            "mls_images": mls_images,
+            "comps_images": comps_images,
+            "pdf_urls": doc.get("pdf_urls", []),
+            "created_at": doc["created_at"],
+            "chat_history": doc.get("chat_history", [])
+        }
+            
+        return success_response(response)
         
     except Exception as e:
         logger.error(f"Error fetching project {property_id}: {e}")
@@ -243,10 +306,13 @@ async def get_project(property_id: str, request: Request, mongo: MongoService = 
 
 @router.get("/image/{image_id}")
 async def get_image(image_id: str, mongo: MongoService = Depends(get_mongo_service)):
-    """Serve an image by ID (redirect to S3 URL). Public endpoint but verifies image exists."""
+    """Serve an image by ID (redirect to S3 URL)."""
     try:
-        # Find the property that contains this image (no user_id filter since it's public)
         from fastapi.responses import RedirectResponse
+        # Search in any property (public access if ID known?)
+        # For security, probably should check auth, but user requested image serving
+        # Assuming images are somewhat private but obfuscated by UUID
+        
         property_doc = await mongo.db["property_data"].find_one({
             "files.id": image_id
         })
@@ -254,15 +320,13 @@ async def get_image(image_id: str, mongo: MongoService = Depends(get_mongo_servi
         if not property_doc:
             return error_response("Image not found", 404)
         
-        # Find the specific image
-        property_data = PropertyData(**property_doc)
-        image = next((img for img in property_data.files if img.id == image_id), None)
+        files = property_doc.get("files", [])
+        image = next((img for img in files if img["id"] == image_id), None)
         
         if not image:
             return error_response("Image not found", 404)
         
-        # Redirect to S3 URL
-        return RedirectResponse(url=image.url)
+        return RedirectResponse(url=image["url"])
         
     except Exception as e:
         logger.error(f"Error fetching image {image_id}: {e}")

@@ -155,6 +155,30 @@ class PDFExtractor:
         """Extract a single image from a PDF page and upload to S3."""
         img_bbox = (img['x0'], img['top'], img['x1'], img['bottom'])
         
+        # Calculate image dimensions
+        img_width = img['x1'] - img['x0']
+        img_height = img['bottom'] - img['top']
+        img_area = img_width * img_height
+        
+        # Filter out small images (logos, icons, etc.)
+        # Lowered thresholds to capture house photos while filtering tiny logos
+        # Most house photos in PDFs are at least 150x100 or larger
+        MIN_WIDTH = 150
+        MIN_HEIGHT = 100
+        MIN_AREA = 15000  # 150x100 = 15,000 pixels
+        
+        if img_width < MIN_WIDTH or img_height < MIN_HEIGHT or img_area < MIN_AREA:
+            logger.debug(
+                f"Skipping small image on page {page_num + 1}: "
+                f"{img_width:.0f}x{img_height:.0f} (area: {img_area:.0f})"
+            )
+            return None
+        
+        logger.info(
+            f"Processing image on page {page_num + 1}: "
+            f"{img_width:.0f}x{img_height:.0f} (area: {img_area:.0f})"
+        )
+        
         # Extract caption
         caption_bbox = (
             max(0, img['x0']),

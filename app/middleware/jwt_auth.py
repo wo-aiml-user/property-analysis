@@ -23,44 +23,40 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: FastAPI, exclude_paths=None):
         super().__init__(app)
         self.exclude_paths = exclude_paths or PUBLIC_PATHS
-        self.valid_routes = None  # Initialize as None
-
-    def get_valid_routes(self, app: FastAPI):
-        """ Extract all (path, method) pairs after app is fully initialized. """
-        if self.valid_routes is None:
-            self.valid_routes = set()
-            for route in app.router.routes:
-                if hasattr(route, "path") and hasattr(route, "methods"):
-                    for method in route.methods:
-                        self.valid_routes.add((route.path, method))
-        return self.valid_routes
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint):
         request_path = request.url.path
         request_method = request.method
 
-        # Ensure routes are extracted after app initialization
-        valid_routes = self.get_valid_routes(request.app)
-
-        # Check if the route exists with the correct method
-        if (request_path, request_method) not in valid_routes:
-            # Check if the path exists but method is incorrect → 405
-            if any(request_path == path for path, _ in valid_routes):
-                return await call_next(request)
-            # Otherwise, the route does not exist → 404
-            return await call_next(request)
+        logger.debug(f"JWT Middleware: {request_method} {request_path}")
 
         # Allow public paths without authentication
         if any(request.url.path.startswith(path) for path in self.exclude_paths):
+            logger.debug(f"Public path, skipping auth: {request_path}")
             return await call_next(request)
+
+        logger.debug(f"Protected path, checking auth: {request_path}")
+
+        # Log ALL headers for debugging
+        logger.debug(f"Request headers: {dict(request.headers)}")
 
         # Get Authorization header
         auth_header = request.headers.get("Authorization")
+        logger.debug(f"Authorization header present: {bool(auth_header)}")
+        
+        if auth_header:
+            logger.debug(f"Authorization header value: {auth_header[:50]}...")
+        else:
+            logger.error(f"No Authorization header found for {request_method} {request_path}")
+            logger.error(f"Available headers: {list(request.headers.keys())}")
+            return error_response("Authentication required", 401)
+        
         # Validate Bearer token format
         try:
             jwt_payload = JWTAuth.verify_token(auth_header)
             # Store the jwt_payload in the request state
             request.state.jwt_payload = jwt_payload
+            logger.info(f"JWT payload set in request.state for user: {jwt_payload.get('user_id')}")
             return await call_next(request)  # Continue processing
         except HTTPException as e:
             logger.error(f"JWT validation error: {str(e)}")

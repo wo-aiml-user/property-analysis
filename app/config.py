@@ -9,8 +9,8 @@ class Settings(BaseSettings):
     # JWT configuration
     JWT_SECRET_KEY: str = "your-secret-key-here"  # Change this in production!
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 7  # Refresh token valid for 7 days
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours (60 * 24)
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30  # Refresh token valid for 30 days
 
     # Server configuration
     HOST: str = "0.0.0.0"
@@ -80,12 +80,14 @@ def get_settings():
     else:
         settings.DEBUG = True
         settings.LOG_LEVEL = "DEBUG"
+        # Can't use "*" with credentials: 'include'
         settings.CORS_ORIGINS = [
+            "http://localhost:5001",
             "http://localhost:5173",
             "http://localhost:5174",
             "http://localhost:3000",
             "http://localhost:8000"
-        ]  # Specific origins for development with credentials
+        ]
     
     return settings
 

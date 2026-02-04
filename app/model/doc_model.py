@@ -6,14 +6,33 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
+from enum import Enum
+
+class FileType(str, Enum):
+    MLS = "mls"
+    COMPS = "comps"
+
+class ImageCategory(str, Enum):
+    EXTERIOR = "exterior"
+    KITCHEN = "kitchen"
+    LIVING_ROOM = "living_room"
+    DINING_ROOM = "dining_room"
+    BEDROOM = "bedroom"
+    BATHROOM = "bathroom"
+    INTERIOR = "interior" # General interior
+    OTHER = "other"
+    UNCATEGORIZED = "uncategorized"
+
 class ExtractedImage(BaseModel):
     """Model for an extracted image from PDF."""
-    id: str = ""  # Unique identifier (empty for legacy data, will be generated on-the-fly)
+    id: str = ""  
     filename: str
     page: int
     caption: str = ""
-    url: str  # S3 public URL (internal use, not exposed to frontend)
+    url: str  
     mime_type: str = "image/png"
+    file_type: FileType = FileType.MLS # Default to MLS for backward compatibility
+    category: str = "uncategorized"  # Changed from enum to str to allow custom categories
 
 class PDFUploadResponse(BaseModel):
     """Response model for PDF upload."""
@@ -29,10 +48,10 @@ class PropertyData(BaseModel):
     """Model for storing property/session data in MongoDB."""
     property_id: str
     user_id: str
-    files: List[ExtractedImage]
+    files: List[ExtractedImage] # Storing all in one list for simplicity in DB, will filter in API
     pdf_urls: List[str] = []
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    chat_history: List[Dict[str, Any]] = [] # To store user's chat messages
+    chat_history: List[Dict[str, Any]] = []
 
 class ProjectSummary(BaseModel):
     """Summary of a property project for the portfolio list."""

@@ -58,22 +58,26 @@ class JWTAuth:
             logger.error("No authorization header found")
             raise HTTPException(status_code=401, detail="Not authenticated")
         
+        logger.debug(f"Auth header received: {auth_header}")
+        
         scheme = ""
         token = ""
         
         try:
             scheme, token = auth_header.split()
         except ValueError:
-            logger.error("Invalid authorization header format")
+            logger.error(f"Invalid authorization header format: {auth_header}")
             raise HTTPException(status_code=401, detail="Invalid authorization header format")
 
         if scheme.lower() != "bearer":
-            logger.error("Invalid authentication scheme")
+            logger.error(f"Invalid authentication scheme: {scheme}")
             raise HTTPException(status_code=401, detail="Invalid authentication scheme")
 
+        logger.debug(f"Token to verify: {token[:30]}...")
+        
         try:
             payload = JWTAuth.decrypt_token(token)
-            # logger.info(f"payload: {payload}")
+            logger.info(f"Token verified successfully for user: {payload.get('user_id')}")
                 
             return payload
             
