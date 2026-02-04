@@ -4,7 +4,6 @@ Document Controller - PDF upload, image extraction, and property management.
 
 from pathlib import Path
 from typing import List, Optional
-import re
 from fastapi import APIRouter, UploadFile, File, Form, Depends, Request, HTTPException, Body
 from loguru import logger
 from starlette.concurrency import run_in_threadpool
@@ -19,39 +18,6 @@ from app.services.s3_service import get_s3_service, S3Service
 from app.services.mongo_service import get_mongo_service, MongoService
 
 router = APIRouter()
-
-# Category patterns for regex-based matching
-CATEGORY_PATTERNS = [
-    (r'\b(kitchen|chef\'?s?\s*kitchen|galley|pantry)\b', 'kitchen'),
-    (r'\b(living\s*room|family\s*room|great\s*room|lounge|den)\b', 'living_room'),
-    (r'\b(bedroom|bed\s*room|master\s*bed|guest\s*bed|primary\s*bed)\b', 'bedroom'),
-    (r'\b(bathroom|bath\s*room|bath|powder\s*room|ensuite|en-suite|primary\s*bath|master\s*bath|half\s*bath|full\s*bath)\b', 'bathroom'),
-    (r'\b(exterior|outdoor|outside|facade|front\s*yard|back\s*yard|backyard|frontyard|patio|deck|pool|garden|landscap|driveway|garage\s*exterior)\b', 'exterior'),
-    (r'\b(dining\s*room|dining|breakfast\s*nook|eat-in)\b', 'dining_room'),
-    (r'\b(garage|car\s*port|carport)\b', 'garage'),
-    (r'\b(office|study|home\s*office|workspace)\b', 'office'),
-    (r'\b(laundry|utility\s*room|mud\s*room|mudroom)\b', 'laundry'),
-    (r'\b(basement|cellar)\b', 'basement'),
-    (r'\b(attic|loft)\b', 'attic'),
-    (r'\b(entry|foyer|entryway|hallway|corridor|staircase|stairs)\b', 'entry'),
-    (r'\b(closet|walk-in|wardrobe)\b', 'closet'),
-]
-
-def category_from_caption(caption: str) -> str:
-    """
-    Determine category from caption using regex pattern matching.
-    Returns the first matching category or 'uncategorized' if no match.
-    """
-    if not caption:
-        return 'uncategorized'
-    
-    caption_lower = caption.lower().strip()
-    
-    for pattern, category in CATEGORY_PATTERNS:
-        if re.search(pattern, caption_lower, re.IGNORECASE):
-            return category
-    
-    return 'uncategorized'
 
 @router.post("/upload", response_model=PDFUploadResponse)
 async def upload_pdfs(
@@ -127,8 +93,8 @@ async def upload_pdfs(
                 for img in extraction_result.get('images', []):
                     image_id = uuid.uuid4().hex
                     caption = img.get('caption', '').strip()
-                    # Use regex-based pattern matching to categorize based on caption keywords
-                    category = category_from_caption(caption)
+                    # Store caption directly as category (frontend will handle categorization)
+                    category = caption.lower() if caption else 'uncategorized'
                     all_images.append(ExtractedImage(
                         id=image_id,
                         filename=f"{filename}_{img['filename']}",
