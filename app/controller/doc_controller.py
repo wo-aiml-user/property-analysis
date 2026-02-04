@@ -11,7 +11,7 @@ import uuid
 from app.utils.response import success_response, error_response
 from app.model.doc_model import (
     PDFUploadResponse, ExtractedImage, PropertyData, ProjectSummary, 
-    FileType, ImageCategory, PropertyDataResponse, ExtractedImageResponse
+    ImageCategory, PropertyDataResponse, ExtractedImageResponse
 )
 from app.services.pdf_extractor import get_pdf_extractor, PDFExtractor
 from app.services.s3_service import get_s3_service, S3Service
@@ -24,7 +24,6 @@ async def upload_pdfs(
     request: Request,
     property_id: str = Form(...),
     files: List[UploadFile] = File(...),
-    file_type: FileType = Form(FileType.MLS),
     mongo: MongoService = Depends(get_mongo_service),
     s3: S3Service = Depends(get_s3_service),
     pdf_extractor: PDFExtractor = Depends(get_pdf_extractor)
@@ -41,7 +40,7 @@ async def upload_pdfs(
         return error_response("Invalid user session", 401)
 
     # Validate files
-    logger.info(f"Received {len(files)} files for property {property_id} as {file_type}")
+    logger.info(f"Received {len(files)} files for property {property_id}")
     for file in files:
         if not file.filename:
             continue
@@ -93,8 +92,6 @@ async def upload_pdfs(
                 for img in extraction_result.get('images', []):
                     image_id = uuid.uuid4().hex
                     caption = img.get('caption', '').strip()
-                    # Store caption directly as category (frontend will handle categorization)
-                    category = caption.lower() if caption else 'uncategorized'
                     all_images.append(ExtractedImage(
                         id=image_id,
                         filename=f"{filename}_{img['filename']}",
@@ -102,8 +99,7 @@ async def upload_pdfs(
                         caption=caption,
                         url=img['url'],
                         mime_type=img.get('mime_type', 'image/png'),
-                        file_type=file_type,
-                        category=category
+                        category='uncategorized'  # Frontend handles categorization
                     ))
                 
             except Exception as e:
@@ -213,10 +209,10 @@ async def get_projects(request: Request, mongo: MongoService = Depends(get_mongo
         logger.error(f"Error fetching projects: {e}")
         return error_response("Failed to fetch projects", 500)
 
-@router.get("/{property_id}")
-async def get_project(property_id: str, request: Request, mongo: MongoService = Depends(get_mongo_service)):
-    """Get filtered details for a specific property (separates MLS vs Comps)."""
-    logger.debug(f"GET /doc/{property_id} - Checking Auth")
+@router.post("/project")
+async def get_project(request: Request, property_id: str = Body(..., embed=True), mongo: MongoService = Depends(get_mongo_service)):
+    """Get details for a specific property."""
+    logger.debug(f"POST /doc/project - property_id: {property_id}")
     
     if not hasattr(request.state, "jwt_payload") or not request.state.jwt_payload:
         return error_response("Authentication required", 401)
@@ -233,32 +229,24 @@ async def get_project(property_id: str, request: Request, mongo: MongoService = 
             return error_response("Project not found", 404)
         
         files = doc.get("files", [])
-        mls_images = []
-        comps_images = []
+        images = []
         
         for img in files:
-            # Map to response format (exclude internal S3 URL if needed, but ExtractedImage has it)
-            # Use public endpoints for frontend
             img_response = {
                 "id": img.get("id"),
                 "filename": img.get("filename"),
                 "page": img.get("page"),
                 "caption": img.get("caption", ""),
+                "url": img.get("url"),
                 "mime_type": img.get("mime_type"),
-                "file_type": img.get("file_type", FileType.MLS.value),
-                "category": img.get("category", ImageCategory.UNCATEGORIZED.value)
+                "category": img.get("category", "uncategorized")
             }
-            
-            if img_response["file_type"] == FileType.MLS.value:
-                mls_images.append(img_response)
-            else:
-                comps_images.append(img_response)
+            images.append(img_response)
         
         response = {
             "property_id": doc["property_id"],
             "user_id": doc["user_id"],
-            "mls_images": mls_images,
-            "comps_images": comps_images,
+            "images": images,
             "pdf_urls": doc.get("pdf_urls", []),
             "created_at": doc["created_at"],
             "chat_history": doc.get("chat_history", [])
@@ -270,14 +258,11 @@ async def get_project(property_id: str, request: Request, mongo: MongoService = 
         logger.error(f"Error fetching project {property_id}: {e}")
         return error_response("Failed to fetch project details", 500)
 
-@router.get("/image/{image_id}")
-async def get_image(image_id: str, mongo: MongoService = Depends(get_mongo_service)):
+@router.post("/image")
+async def get_image(request: Request, image_id: str = Body(..., embed=True), mongo: MongoService = Depends(get_mongo_service)):
     """Serve an image by ID (redirect to S3 URL)."""
     try:
         from fastapi.responses import RedirectResponse
-        # Search in any property (public access if ID known?)
-        # For security, probably should check auth, but user requested image serving
-        # Assuming images are somewhat private but obfuscated by UUID
         
         property_doc = await mongo.db["property_data"].find_one({
             "files.id": image_id

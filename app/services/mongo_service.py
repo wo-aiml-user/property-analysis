@@ -57,16 +57,15 @@ class MongoService:
             users = self.db[settings.MONGODB_COLLECTION_NAME]
             await users.create_index("email", unique=True)
             
-            # Refresh tokens collection indexes - NEW
+            # Refresh tokens collection indexes
             tokens = self.db["refresh_tokens"]
             await tokens.create_index("token_hash", unique=True)
             await tokens.create_index("user_id")
             # Auto-expire tokens
             await tokens.create_index("expires_at", expireAfterSeconds=0)
             
-            # Property data collection - cleanup incorrect index
+            # Property data collection - proper indexes
             property_data = self.db["property_data"]
-            
             logger.info("MongoDB indexes verified")
         except Exception as e:
             logger.error(f"Error creating indexes: {e}")

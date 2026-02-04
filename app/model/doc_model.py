@@ -8,10 +8,6 @@ from datetime import datetime
 
 from enum import Enum
 
-class FileType(str, Enum):
-    MLS = "mls"
-    COMPS = "comps"
-
 class ImageCategory(str, Enum):
     EXTERIOR = "exterior"
     KITCHEN = "kitchen"
@@ -31,8 +27,7 @@ class ExtractedImage(BaseModel):
     caption: str = ""
     url: str  
     mime_type: str = "image/png"
-    file_type: FileType = FileType.MLS # Default to MLS for backward compatibility
-    category: str = "uncategorized"  # Changed from enum to str to allow custom categories
+    category: str = "uncategorized"  # Frontend handles categorization
 
 class PDFUploadResponse(BaseModel):
     """Response model for PDF upload."""

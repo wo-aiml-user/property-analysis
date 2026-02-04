@@ -80,14 +80,8 @@ def get_settings():
     else:
         settings.DEBUG = True
         settings.LOG_LEVEL = "DEBUG"
-        # Can't use "*" with credentials: 'include'
-        settings.CORS_ORIGINS = [
-            "http://localhost:5001",
-            "http://localhost:5173",
-            "http://localhost:5174",
-            "http://localhost:3000",
-            "http://localhost:8000"
-        ]
+        # Allow all origins in development (credentials must be disabled for wildcard)
+        settings.CORS_ORIGINS = ["*"]
     
     return settings
 

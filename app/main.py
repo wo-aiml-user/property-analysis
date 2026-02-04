@@ -31,5 +31,19 @@ app.state.config = settings
 # Apply all middlewares first
 setup_middlewares(app)
 
+# Add root endpoint
+@app.get("/")
+async def root():
+    return {
+        "message": "Property Analysis API",
+        "version": "1.0",
+        "docs": "/docs",
+        "endpoints": {
+            "auth": "/auth/*",
+            "documents": "/doc/*",
+            "chat": "/chat/*"
+        }
+    }
+
 # Then setup routes
 setup_routes(app)

@@ -9,14 +9,10 @@ PUBLIC_PATHS = [
     "/docs",  # Swagger UI
     "/redoc",  # ReDoc UI
     "/openapi.json",  # OpenAPI schema
-    "/token",  # Token generation endpoint (legacy)
-    "/health",  # Health check endpoint if you have one
-    "/auth/token",  # Token generation endpoint (legacy)
     "/auth/login",  # User login endpoint
     "/auth/register",
     "/auth/refresh",
     "/auth/logout",
-    "/doc/image/",  # Image serving endpoint (verifies ownership internally)
 ]
 
 class JWTAuthMiddleware(BaseHTTPMiddleware):
@@ -31,22 +27,16 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         logger.debug(f"JWT Middleware: {request_method} {request_path}")
 
         # Allow public paths without authentication
-        if any(request.url.path.startswith(path) for path in self.exclude_paths):
+        if any(request_path.startswith(path) for path in self.exclude_paths):
             logger.debug(f"Public path, skipping auth: {request_path}")
             return await call_next(request)
 
         logger.debug(f"Protected path, checking auth: {request_path}")
 
-        # Log ALL headers for debugging
-        logger.debug(f"Request headers: {dict(request.headers)}")
-
         # Get Authorization header
         auth_header = request.headers.get("Authorization")
-        if auth_header:
-            logger.debug(f"Authorization header present: {bool(auth_header)}")
-        else:
-            logger.error(f"No Authorization header found for {request_method} {request_path}")
-            logger.error(f"Available headers: {list(request.headers.keys())}")
+        if not auth_header:
+            logger.error(f"No Authorization header for {request_method} {request_path}")
             return error_response("Authentication required", 401)
         
         # Validate Bearer token format
