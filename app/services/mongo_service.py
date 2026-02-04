@@ -66,17 +66,6 @@ class MongoService:
             
             # Property data collection - cleanup incorrect index
             property_data = self.db["property_data"]
-            try:
-                # Check if incorrect email_1 index exists and drop it
-                indexes = await property_data.list_indexes().to_list(length=None)
-                index_names = [idx['name'] for idx in indexes]
-                
-                if 'email_1' in index_names:
-                    logger.warning("Found incorrect email_1 index on property_data, dropping it...")
-                    await property_data.drop_index('email_1')
-                    logger.info("Successfully dropped email_1 index from property_data")
-            except Exception as e:
-                logger.debug(f"Index cleanup check: {e}")
             
             logger.info("MongoDB indexes verified")
         except Exception as e:

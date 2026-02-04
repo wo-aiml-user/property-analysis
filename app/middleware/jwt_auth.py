@@ -42,10 +42,8 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
 
         # Get Authorization header
         auth_header = request.headers.get("Authorization")
-        logger.debug(f"Authorization header present: {bool(auth_header)}")
-        
         if auth_header:
-            logger.debug(f"Authorization header value: {auth_header[:50]}...")
+            logger.debug(f"Authorization header present: {bool(auth_header)}")
         else:
             logger.error(f"No Authorization header found for {request_method} {request_path}")
             logger.error(f"Available headers: {list(request.headers.keys())}")

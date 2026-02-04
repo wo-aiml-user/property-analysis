@@ -82,12 +82,10 @@ async def login(response: Response, request: UserLogin, user_agent: Optional[str
         # 2. Refresh Token (Opaque)
         refresh_token = generate_opaque_token()
         refresh_token_hash = get_token_hash(refresh_token)
-        family_id = generate_opaque_token() # Start a new token family
         
         refresh_doc = {
             "user_id": str(user["_id"]),
             "token_hash": refresh_token_hash,
-            "family_id": family_id,
             "created_at": datetime.utcnow(),
             "expires_at": datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
             "revoked": False,
@@ -143,16 +141,11 @@ async def refresh_token(
             response.delete_cookie(REFRESH_COOKIE_NAME, path="/auth/refresh")
             return error_response("Invalid refresh token", 401)
             
-        # Check if revoked (Reuse Detection Trigger)
+        # Check if revoked
         if stored_token.get("revoked"):
-            logger.warning(f"Reuse of revoked token family: {stored_token.get('family_id')}")
-            # Revoke entire family
-            await tokens_col.update_many(
-                {"family_id": stored_token["family_id"]},
-                {"$set": {"revoked": True}}
-            )
+            logger.warning(f"Attempted to use revoked token")
             response.delete_cookie(REFRESH_COOKIE_NAME, path="/auth/refresh")
-            return error_response("Token reused - session terminated", 401)
+            return error_response("Token has been revoked", 401)
             
         # Check expiration
         if stored_token["expires_at"] < datetime.utcnow():
@@ -185,7 +178,6 @@ async def refresh_token(
         new_refresh_doc = {
             "user_id": stored_token["user_id"],
             "token_hash": new_refresh_hash,
-            "family_id": stored_token["family_id"],
             "created_at": datetime.utcnow(),
             "expires_at": datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
             "revoked": False,
