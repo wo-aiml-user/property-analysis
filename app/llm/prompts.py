@@ -9,9 +9,8 @@ Analyze these property images and regenerate them based on the user's feedback.
 User Feedback: {user_feedback}
 
 Instructions:
-1. Analyze the provided images
-2. Apply the user's renovation feedback to transform the space
-3. Generate new images showing the renovated/redesigned space
+Analyze the provided images
+Apply the user's renovation feedback to transform the space
 
 Focus on:
 - Applying the requested style changes

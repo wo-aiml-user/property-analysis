@@ -23,7 +23,7 @@ async def register(request: UserRegister, mongo: MongoService = Depends(get_mong
     """Register a new user."""
     logger.info(f"Received registration request for email: {request.email}")
     try:
-        users_collection = mongo.get_users_collection()
+        users_collection = await mongo.get_users_collection()
         if users_collection is None:
             logger.error("Users collection is None. Database connection might have failed.")
             return error_response("Database service unavailable", 503)
@@ -43,12 +43,14 @@ async def register(request: UserRegister, mongo: MongoService = Depends(get_mong
             logger.error(f"Password hashing failed: {e}")
             raise e
 
+        # Create user document with empty properties array
         user_doc = {
             "email": request.email,
             "hashed_password": hashed_pw,
             "full_name": request.full_name,
             "created_at": datetime.utcnow(),
-            "is_active": True
+            "is_active": True,
+            "properties": []  # Initialize empty properties array
         }
         
         logger.info("Inserting user into database...")
@@ -65,7 +67,7 @@ async def register(request: UserRegister, mongo: MongoService = Depends(get_mong
 async def login(response: Response, request: UserLogin, user_agent: Optional[str] = None, mongo: MongoService = Depends(get_mongo_service)):
     """Login and issue access/refresh tokens."""
     try:
-        users_collection = mongo.get_users_collection()
+        users_collection = await mongo.get_users_collection()
         user = await users_collection.find_one({"email": request.email})
         
         if not user or not verify_password(request.password, user["hashed_password"]):
@@ -161,7 +163,7 @@ async def refresh_token(
         )
         
         # 2. Issue new tokens
-        users_col = mongo.get_users_collection()
+        users_col = await mongo.get_users_collection()
         from bson.objectid import ObjectId
         user = await users_col.find_one({"_id": ObjectId(stored_token["user_id"])})
         

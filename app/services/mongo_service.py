@@ -46,6 +46,28 @@ class MongoService:
             logger.error(f"Failed to connect to MongoDB: {e}")
             self.client = None
             self.db = None
+    
+    async def _ensure_collection_exists(self, collection_name: str):
+        """Ensure a collection exists, create if it doesn't."""
+        if self.db is None:
+            logger.error("Database not initialized")
+            return False
+            
+        try:
+            # List existing collections
+            existing_collections = await self.db.list_collection_names()
+            
+            if collection_name not in existing_collections:
+                # Create the collection
+                await self.db.create_collection(collection_name)
+                logger.info(f"Created collection: {collection_name}")
+            else:
+                logger.debug(f"Collection already exists: {collection_name}")
+                
+            return True
+        except Exception as e:
+            logger.error(f"Error ensuring collection {collection_name} exists: {e}")
+            return False
             
     async def _ensure_indexes(self):
         """Create necessary indexes."""
@@ -53,36 +75,79 @@ class MongoService:
             return
             
         try:
-            # Users collection indexes
-            users = self.db[settings.MONGODB_COLLECTION_NAME]
-            await users.create_index("email", unique=True)
+            # Ensure property_data collection exists
+            await self._ensure_collection_exists(settings.MONGODB_COLLECTION_NAME)
+            
+            # Property_data collection indexes (stores both users and properties)
+            property_data = self.db[settings.MONGODB_COLLECTION_NAME]
+            
+            # Get existing indexes
+            existing_indexes = await property_data.index_information()
+            
+            # Create email index only if it doesn't exist
+            if "email_1" not in existing_indexes:
+                await property_data.create_index("email", unique=True, sparse=True)
+                logger.info("Created email index on property_data")
+            else:
+                logger.debug("Email index already exists, skipping creation")
+            
+            # Create properties.property_id index only if it doesn't exist
+            if "properties.property_id_1" not in existing_indexes:
+                await property_data.create_index("properties.property_id")
+                logger.info("Created properties.property_id index")
+            else:
+                logger.debug("Properties.property_id index already exists, skipping creation")
+            
+            # Ensure refresh_tokens collection exists
+            await self._ensure_collection_exists("refresh_tokens")
             
             # Refresh tokens collection indexes
             tokens = self.db["refresh_tokens"]
-            await tokens.create_index("token_hash", unique=True)
-            await tokens.create_index("user_id")
-            # Auto-expire tokens
-            await tokens.create_index("expires_at", expireAfterSeconds=0)
+            existing_token_indexes = await tokens.index_information()
             
-            # Property data collection - proper indexes
-            property_data = self.db["property_data"]
+            # Create token_hash index only if it doesn't exist
+            if "token_hash_1" not in existing_token_indexes:
+                await tokens.create_index("token_hash", unique=True)
+                logger.info("Created token_hash index")
+            else:
+                logger.debug("Token_hash index already exists, skipping creation")
+            
+            # Create user_id index only if it doesn't exist
+            if "user_id_1" not in existing_token_indexes:
+                await tokens.create_index("user_id")
+                logger.info("Created user_id index")
+            else:
+                logger.debug("User_id index already exists, skipping creation")
+            
+            # Create expires_at TTL index only if it doesn't exist
+            if "expires_at_1" not in existing_token_indexes:
+                await tokens.create_index("expires_at", expireAfterSeconds=0)
+                logger.info("Created expires_at TTL index")
+            else:
+                logger.debug("Expires_at index already exists, skipping creation")
+            
             logger.info("MongoDB indexes verified")
         except Exception as e:
             logger.error(f"Error creating indexes: {e}")
 
     
-    def get_collection(self, collection_name: str): # -> AsyncIOMotorCollection
-        """Get a MongoDB collection."""
+    async def get_collection(self, collection_name: str):
+        """Get a MongoDB collection, ensuring it exists first."""
         if self.db is None:
             logger.error("MongoDB database not initialized")
-            # Return a generic proxy or raise, but for now returning None might break callers not checking
-            # Ideally we should raise specific exception
             return None
+            
+        # Ensure collection exists
+        await self._ensure_collection_exists(collection_name)
         return self.db[collection_name]
     
-    def get_users_collection(self):
-        """Get the users collection."""
-        return self.get_collection(settings.MONGODB_COLLECTION_NAME)
+    async def get_users_collection(self):
+        """Get the collection that stores user data (property_data)."""
+        return await self.get_collection(settings.MONGODB_COLLECTION_NAME)
+    
+    async def get_property_data_collection(self):
+        """Get the property_data collection."""
+        return await self.get_collection(settings.MONGODB_COLLECTION_NAME)
 
     def close(self):
         """Close MongoDB connection."""

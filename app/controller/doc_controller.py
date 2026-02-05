@@ -4,6 +4,7 @@ Document Controller - PDF upload, image extraction, and property management.
 
 from pathlib import Path
 from typing import List, Optional
+from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, Form, Depends, Request, HTTPException, Body
 from loguru import logger
 from starlette.concurrency import run_in_threadpool
@@ -36,7 +37,9 @@ async def upload_pdfs(
         return error_response("Authentication required", 401)
         
     user_id = request.state.jwt_payload.get("user_id")
-    if not user_id:
+    user_email = request.state.jwt_payload.get("email")
+    
+    if not user_id or not user_email:
         return error_response("Invalid user session", 401)
 
     # Validate files
@@ -108,38 +111,47 @@ async def upload_pdfs(
             finally:
                 await file.close()
         
-        # Step 5: Persist Property Data (Upsert to add to existing property if exists)
-        # We need to add new images to existing list if property exists
+        # Step 5: Persist Property Data in user's properties array
+        # Find the user document and add/update property in their properties array
         
-        existing_doc = await mongo.db["property_data"].find_one({"property_id": property_id, "user_id": user_id})
+        property_data_col = await mongo.get_property_data_collection()
         
-        if existing_doc:
-            # Append new images and pdfs
-            await mongo.db["property_data"].update_one(
-                {"property_id": property_id},
+        # Check if user has this property already
+        user_doc = await property_data_col.find_one({
+            "email": user_email,  # Use email from JWT
+            "properties.property_id": property_id
+        })
+        
+        if user_doc:
+            # Property exists, append new images and pdfs to existing property
+            result = await property_data_col.update_one(
+                {
+                    "email": user_email,
+                    "properties.property_id": property_id
+                },
                 {
                     "$push": {
-                        "files": {"$each": [img.model_dump() for img in all_images]},
-                        "pdf_urls": {"$each": pdf_urls}
+                        "properties.$.files": {"$each": [img.model_dump() for img in all_images]},
+                        "properties.$.pdf_urls": {"$each": pdf_urls}
                     }
                 }
             )
-            # Combine for response
-            # Note: Response will only show newly uploaded images for now to keep payload light?
-            # Or return full state? The response model implies full state or session state.
-            # Let's return just what was processed + context
-            
+            logger.info(f"Updated existing property {property_id} with {len(all_images)} new images (matched: {result.matched_count}, modified: {result.modified_count})")
         else:
-            # Create new
-            property_data = PropertyData(
-                property_id=property_id,
-                user_id=user_id,
-                files=all_images,
-                pdf_urls=pdf_urls
+            # Property doesn't exist, create new property in user's properties array
+            new_property = {
+                "property_id": property_id,
+                "files": [img.model_dump() for img in all_images],
+                "pdf_urls": pdf_urls,
+                "created_at": datetime.utcnow(),
+                "chat_history": []
+            }
+            
+            result = await property_data_col.update_one(
+                {"email": user_email},
+                {"$push": {"properties": new_property}}
             )
-            await mongo.db["property_data"].insert_one(property_data.model_dump())
-        
-        logger.info(f"Property {property_id} updated with {len(all_images)} new images")
+            logger.info(f"Created new property {property_id} with {len(all_images)} images (matched: {result.matched_count}, modified: {result.modified_count})")
         
         response = PDFUploadResponse(
             property_id=property_id,
@@ -169,15 +181,26 @@ async def update_image_category(
     if not hasattr(request.state, 'jwt_payload'):
         return error_response("Authentication required", 401)
     
+    user_id = request.state.jwt_payload.get("user_id")
     category = payload.get("category")
     if not category:
         return error_response("Category is required", 400)
         
     try:
-        # Update specific item in array
-        result = await mongo.db["property_data"].update_one(
-            {"property_id": property_id, "files.id": image_id},
-            {"$set": {"files.$.category": category}}
+        property_data_col = await mongo.get_property_data_collection()
+        
+        # Update image category in nested properties array
+        result = await property_data_col.update_one(
+            {
+                "email": user_id,
+                "properties.property_id": property_id,
+                "properties.files.id": image_id
+            },
+            {"$set": {"properties.$[prop].files.$[img].category": category}},
+            array_filters=[
+                {"prop.property_id": property_id},
+                {"img.id": image_id}
+            ]
         )
         
         if result.modified_count == 0:
@@ -189,22 +212,26 @@ async def update_image_category(
         logger.error(f"Error updating category: {e}")
         return error_response("Failed to update category", 500)
 
-@router.get("/projects", response_model=List[PropertyData])
+@router.get("/projects")
 async def get_projects(request: Request, mongo: MongoService = Depends(get_mongo_service)):
     """List all projects for the authenticated user."""
     if not hasattr(request.state, "jwt_payload") or not request.state.jwt_payload:
         return error_response("Authentication required", 401)
         
-    user_id = request.state.jwt_payload.get("user_id")
-    if not user_id:
+    user_email = request.state.jwt_payload.get("email")
+    if not user_email:
         return error_response("Invalid user session", 401)
         
     try:
-        cursor = mongo.db["property_data"].find({"user_id": user_id}).sort("created_at", -1)
-        projects = []
-        async for doc in cursor:
-            projects.append(PropertyData(**doc))
-        return projects
+        property_data_col = await mongo.get_property_data_collection()
+        user_doc = await property_data_col.find_one({"email": user_email})
+        
+        if not user_doc or "properties" not in user_doc:
+            return success_response([])
+        
+        # Return user's properties array
+        properties = user_doc.get("properties", [])
+        return success_response(properties)
     except Exception as e:
         logger.error(f"Error fetching projects: {e}")
         return error_response("Failed to fetch projects", 500)
@@ -217,18 +244,31 @@ async def get_project(request: Request, property_id: str = Body(..., embed=True)
     if not hasattr(request.state, "jwt_payload") or not request.state.jwt_payload:
         return error_response("Authentication required", 401)
         
-    user_id = request.state.jwt_payload.get("user_id")
+    user_email = request.state.jwt_payload.get("email")
     
     try:
-        doc = await mongo.db["property_data"].find_one({
-            "property_id": property_id,
-            "user_id": user_id
+        property_data_col = await mongo.get_property_data_collection()
+        
+        # Find user and extract specific property from properties array
+        user_doc = await property_data_col.find_one({
+            "email": user_email,
+            "properties.property_id": property_id
         })
         
-        if not doc:
+        if not user_doc:
             return error_response("Project not found", 404)
         
-        files = doc.get("files", [])
+        # Find the specific property in the properties array
+        property_doc = None
+        for prop in user_doc.get("properties", []):
+            if prop.get("property_id") == property_id:
+                property_doc = prop
+                break
+        
+        if not property_doc:
+            return error_response("Project not found", 404)
+        
+        files = property_doc.get("files", [])
         images = []
         
         for img in files:
@@ -244,12 +284,12 @@ async def get_project(request: Request, property_id: str = Body(..., embed=True)
             images.append(img_response)
         
         response = {
-            "property_id": doc["property_id"],
-            "user_id": doc["user_id"],
+            "property_id": property_doc["property_id"],
+            "user_id": user_email,
             "images": images,
-            "pdf_urls": doc.get("pdf_urls", []),
-            "created_at": doc["created_at"],
-            "chat_history": doc.get("chat_history", [])
+            "pdf_urls": property_doc.get("pdf_urls", []),
+            "created_at": property_doc.get("created_at"),
+            "chat_history": property_doc.get("chat_history", [])
         }
             
         return success_response(response)

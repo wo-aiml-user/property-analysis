@@ -6,9 +6,11 @@ from app.utils.response import error_response
 
 # Paths that don't require authentication
 PUBLIC_PATHS = [
+    "/",  # Root endpoint
     "/docs",  # Swagger UI
     "/redoc",  # ReDoc UI
     "/openapi.json",  # OpenAPI schema
+    "/favicon.ico",  # Favicon
     "/auth/login",  # User login endpoint
     "/auth/register",
     "/auth/refresh",
@@ -27,7 +29,8 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         logger.debug(f"JWT Middleware: {request_method} {request_path}")
 
         # Allow public paths without authentication
-        if any(request_path.startswith(path) for path in self.exclude_paths):
+        # Special handling for root path to avoid matching all paths
+        if request_path == "/" or any(request_path.startswith(path) for path in self.exclude_paths if path != "/"):
             logger.debug(f"Public path, skipping auth: {request_path}")
             return await call_next(request)
 

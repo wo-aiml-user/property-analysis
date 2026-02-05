@@ -59,6 +59,7 @@ class JWTAuth:
             raise HTTPException(status_code=401, detail="Not authenticated")
         
         logger.debug("Auth header received")
+        logger.debug(f"Auth header (first 20 chars): {auth_header[:20]}...")
         
         scheme = ""
         token = ""
@@ -73,7 +74,7 @@ class JWTAuth:
             logger.error(f"Invalid authentication scheme: {scheme}")
             raise HTTPException(status_code=401, detail="Invalid authentication scheme")
 
-        logger.debug("Verifying token...")
+        logger.debug(f"Verifying token: {token[:10]}... (len: {len(token)})")
         
         try:
             payload = JWTAuth.decrypt_token(token)
