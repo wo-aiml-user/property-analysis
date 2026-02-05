@@ -30,9 +30,12 @@ async def register(request: UserRegister, mongo: MongoService = Depends(get_mong
 
         logger.info("Checking if user exists...")
         # Check if user exists
-        if await users_collection.find_one({"email": request.email}):
+        user_exists = await users_collection.find_one({"email": request.email})
+        if user_exists:
             logger.info("User already exists")
-            return error_response("Email already registered", 400)
+            return success_response({
+                "message": "You have already registered. Please sign in."
+            }, 200)
             
         logger.info("Hashing password...")
         # Create user
@@ -107,6 +110,8 @@ async def login(response: Response, request: UserLogin, user_agent: Optional[str
             path="/auth/refresh", # Restrict cookie to refresh endpoint
             max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
         )
+        
+        logger.info(f"User logged in successfully: {user.get('email')}")
         
         return success_response(TokenResponse(
             access_token=access_token,
@@ -208,6 +213,7 @@ async def refresh_token(
 @router.post("/logout")
 async def logout(response: Response, refresh_token: Optional[str] = Cookie(None, alias=REFRESH_COOKIE_NAME), mongo: MongoService = Depends(get_mongo_service)):
     """Logout user and revoke token."""
+    logger.info("Logout request received")
     if refresh_token:
         try:
             token_hash = get_token_hash(refresh_token)
@@ -219,4 +225,5 @@ async def logout(response: Response, refresh_token: Optional[str] = Cookie(None,
             pass # Fail silently on logout
             
     response.delete_cookie(REFRESH_COOKIE_NAME, path="/auth/refresh")
+    logger.info("Logged out successfully")
     return success_response({"message": "Logged out successfully"})

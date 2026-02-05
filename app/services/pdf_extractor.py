@@ -76,7 +76,7 @@ class PDFExtractor:
             logger.error(f"Error processing PDF {pdf_path}: {e}")
             raise
         
-        logger.info(f"Extracted {len(results['images'])} images from {pdf_path}")
+        logger.info(f"PDF Extract Summary for {Path(pdf_path).name}: {len(results['images'])} images extracted from {results['total_pages']} pages")
         return results
     
     def extract_images_from_bytes(
@@ -140,7 +140,7 @@ class PDFExtractor:
             logger.error(f"Error processing PDF {pdf_filename} from bytes: {e}")
             raise
         
-        logger.info(f"Extracted {len(results['images'])} images from {pdf_filename}")
+        logger.info(f"PDF Extract Summary for {pdf_filename}: {len(results['images'])} images extracted from {results['total_pages']} pages")
         return results
     
     def _extract_and_upload_image(
@@ -168,14 +168,14 @@ class PDFExtractor:
         MIN_AREA = 15000  # 150x100 = 15,000 pixels
         
         if img_width < MIN_WIDTH or img_height < MIN_HEIGHT or img_area < MIN_AREA:
-            logger.debug(
-                f"Skipping small image on page {page_num + 1}: "
-                f"{img_width:.0f}x{img_height:.0f} (area: {img_area:.0f})"
-            )
+            # logger.debug(
+            #     f"Skipping small image on page {page_num + 1}: "
+            #     f"{img_width:.0f}x{img_height:.0f} (area: {img_area:.0f})"
+            # )
             return None
         
         logger.info(
-            f"Processing image on page {page_num + 1}: "
+            f"Extracting image p{page_num + 1}_img{img_num + 1}: "
             f"{img_width:.0f}x{img_height:.0f} (area: {img_area:.0f})"
         )
         

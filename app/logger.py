@@ -11,9 +11,11 @@ def setup_logger(settings):
     logger.remove()  # Remove default handler
 
     logger.add(
-        sys.stdout,  # Log to console
-        format="{level} | {file} | {line} | {message}",
-        level=settings.LOG_LEVEL
+        sys.stderr,  # Use stderr for better visibility with Uvicorn
+        format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+        level=settings.LOG_LEVEL,
+        enqueue=True, # Async logging for console too
+        colorize=True
     )
 
     logger.add(

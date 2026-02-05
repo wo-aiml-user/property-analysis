@@ -62,7 +62,8 @@ class MongoService:
                 await self.db.create_collection(collection_name)
                 logger.info(f"Created collection: {collection_name}")
             else:
-                logger.debug(f"Collection already exists: {collection_name}")
+                pass 
+                # logger.debug(f"Collection already exists: {collection_name}")
                 
             return True
         except Exception as e:
@@ -138,7 +139,7 @@ class MongoService:
             return None
             
         # Ensure collection exists
-        await self._ensure_collection_exists(collection_name)
+        # await self._ensure_collection_exists(collection_name) # Too noisy to log every check
         return self.db[collection_name]
     
     async def get_users_collection(self):

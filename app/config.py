@@ -80,8 +80,14 @@ def get_settings():
     else:
         settings.DEBUG = True
         settings.LOG_LEVEL = "DEBUG"
-        # Allow all origins in development (credentials must be disabled for wildcard)
-        settings.CORS_ORIGINS = ["*"]
+        settings.LOG_LEVEL = "DEBUG"
+        # Allow localhost origins for development (required for credentials)
+        settings.CORS_ORIGINS = [
+            "http://localhost:5000",
+            "http://127.0.0.1:5000",
+            "http://localhost:3000",  # Common React dev port
+            "http://localhost:5173",  # Common Vite dev port
+        ]
     
     return settings
 

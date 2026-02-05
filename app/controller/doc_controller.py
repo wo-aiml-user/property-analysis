@@ -136,7 +136,7 @@ async def upload_pdfs(
                     }
                 }
             )
-            logger.info(f"Updated existing property {property_id} with {len(all_images)} new images (matched: {result.matched_count}, modified: {result.modified_count})")
+            logger.info(f"Updated property {property_id}: matched={result.matched_count}, modified={result.modified_count}, new_images={len(all_images)}")
         else:
             # Property doesn't exist, create new property in user's properties array
             new_property = {
@@ -151,7 +151,7 @@ async def upload_pdfs(
                 {"email": user_email},
                 {"$push": {"properties": new_property}}
             )
-            logger.info(f"Created new property {property_id} with {len(all_images)} images (matched: {result.matched_count}, modified: {result.modified_count})")
+            logger.info(f"Created new property {property_id}: matched={result.matched_count}, modified={result.modified_count}, images={len(all_images)}")
         
         response = PDFUploadResponse(
             property_id=property_id,
@@ -231,6 +231,7 @@ async def get_projects(request: Request, mongo: MongoService = Depends(get_mongo
         
         # Return user's properties array
         properties = user_doc.get("properties", [])
+        logger.info(f"Retrieved {len(properties)} projects for user {user_email}")
         return success_response(properties)
     except Exception as e:
         logger.error(f"Error fetching projects: {e}")
@@ -265,8 +266,13 @@ async def get_project(request: Request, property_id: str = Body(..., embed=True)
                 property_doc = prop
                 break
         
+                break
+        
         if not property_doc:
+            logger.warning(f"Project not found: {property_id} for user {user_email}")
             return error_response("Project not found", 404)
+        
+        logger.info(f"Retrieved project {property_id} for user {user_email}")
         
         files = property_doc.get("files", [])
         images = []
