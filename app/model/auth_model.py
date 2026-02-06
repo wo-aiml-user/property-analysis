@@ -65,4 +65,7 @@ class RefreshToken(BaseModel):
     expires_at: datetime
     created_at: datetime = Field(default_factory=datetime.utcnow)
     revoked: bool = False
-    family_id: str = Field(..., description="ID to track token families for rotation")
+
+class RefreshTokenRequest(BaseModel):
+    """Request model for manual refresh token submission."""
+    refresh_token: str

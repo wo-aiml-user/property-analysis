@@ -30,8 +30,6 @@ class Settings(BaseSettings):
     # OpenAI API configuration
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-image-1.5"
-    GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.5-flash-image"
     
     # AWS S3 configuration
     AWS_ACCESS_KEY_ID: str = ""

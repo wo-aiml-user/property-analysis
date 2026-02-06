@@ -12,9 +12,9 @@ PUBLIC_PATHS = [
     "/openapi.json",  # OpenAPI schema
     "/favicon.ico",  # Favicon
     "/auth/login",  # User login endpoint
-    "/auth/register",
-    "/auth/refresh",
-    "/auth/logout",
+    "/auth/register", # User registration endpointss
+    "/auth/refresh",# User refresh token endpoint
+    "/auth/logout", # User logout endpoint
 ]
 
 class JWTAuthMiddleware(BaseHTTPMiddleware):

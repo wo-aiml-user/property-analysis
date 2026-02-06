@@ -9,7 +9,7 @@ import uuid
 from loguru import logger
 
 from app.utils.response import error_response, success_response
-from app.model.auth_model import UserLogin, UserRegister, UserResponse, TokenResponse
+from app.model.auth_model import UserLogin, UserRegister, UserResponse, TokenResponse, RefreshTokenRequest
 from app.services.mongo_service import get_mongo_service, MongoService
 from app.services.security import verify_password, get_password_hash, generate_opaque_token, get_token_hash
 from app.services.token import JWTAuth
@@ -137,12 +137,18 @@ async def login(response: Response, request: UserLogin, mongo: MongoService = De
 async def refresh_token(
     response: Response, 
     request: Request,
-    refresh_token: Optional[str] = Cookie(None, alias=REFRESH_COOKIE_NAME),
+    body: Optional[RefreshTokenRequest] = None,
+    refresh_token_cookie: Optional[str] = Cookie(None, alias=REFRESH_COOKIE_NAME),
     mongo: MongoService = Depends(get_mongo_service)
 ):
     """Rotate refresh token and issue new access token."""
+    # Try getting token from cookie first, then body
+    refresh_token = refresh_token_cookie
+    if not refresh_token and body:
+        refresh_token = body.refresh_token
+
     if not refresh_token:
-        logger.warning("Token refresh failed: Missing refresh_token cookie")
+        logger.warning("Token refresh failed: Missing refresh_token cookie or body")
         return error_response("Refresh token missing", 401)
         
     try:
@@ -178,13 +184,13 @@ async def refresh_token(
             
         # --- Token Rotation ---
         
-        # 1. Pull old token (delete it)
+        # 1. Revoke old token
         await users_col.update_one(
-            {"_id": user["_id"]},
-            {"$pull": {"refresh_tokens": {"token_hash": token_hash}}}
+            {"_id": user["_id"], "refresh_tokens.token_hash": token_hash},
+            {"$set": {"refresh_tokens.$.revoked": True}}
         )
         
-        # 2. Issue new tokens
+         # 2. Issue new tokens
         new_access_token = JWTAuth.create_token(
             {"user_id": str(user["_id"]), "email": user["email"]}
         )
@@ -194,7 +200,6 @@ async def refresh_token(
         
         new_refresh_doc = {
             "user_id": str(user["_id"]),
-            "family_id": stored_token.get("family_id", str(uuid.uuid4())), # Preserve family ID if exists
             "token_hash": new_refresh_hash,
             "created_at": datetime.utcnow(),
             "expires_at": datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
@@ -228,18 +233,29 @@ async def refresh_token(
         return error_response("Token refresh failed", 500)
 
 @router.post("/logout")
-async def logout(response: Response, refresh_token: Optional[str] = Cookie(None, alias=REFRESH_COOKIE_NAME), mongo: MongoService = Depends(get_mongo_service)):
-    """Logout user and delete token."""
+async def logout(
+    response: Response, 
+    body: Optional[RefreshTokenRequest] = None,
+    refresh_token_cookie: Optional[str] = Cookie(None, alias=REFRESH_COOKIE_NAME), 
+    mongo: MongoService = Depends(get_mongo_service)
+):
+    """Logout user and revoke token."""
+    
+    refresh_token = refresh_token_cookie
+    if not refresh_token and body:
+        refresh_token = body.refresh_token
+        
     logger.info("Logout request received")
+    
     if refresh_token:
         try:
             token_hash = get_token_hash(refresh_token)
             users_col = await mongo.get_users_collection()
             
-            # Delete token from user's list
+            # Revoke token in user's list
             await users_col.update_one(
                 {"refresh_tokens.token_hash": token_hash},
-                {"$pull": {"refresh_tokens": {"token_hash": token_hash}}}
+                {"$set": {"refresh_tokens.$.revoked": True}}
             )
         except Exception:
             pass # Fail silently on logout
