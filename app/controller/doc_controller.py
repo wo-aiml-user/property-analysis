@@ -12,11 +12,12 @@ import uuid
 from app.utils.response import success_response, error_response
 from app.model.doc_model import (
     PDFUploadResponse, ExtractedImage, PropertyData, ProjectSummary,
-    ImageCategory, PropertyDataResponse, ExtractedImageResponse
+    PropertyDataResponse, ExtractedImageResponse
 )
 from app.services.pdf_extractor import get_pdf_extractor, PDFExtractor
 from app.services.s3_service import get_s3_service, S3Service
 from app.services.mongo_service import get_mongo_service, MongoService
+from app.model.doc_model import FileGroup, FilesStructure
 
 router = APIRouter()
 
@@ -35,12 +36,16 @@ async def upload_pdfs(
     """
     # 1. Authentication Check
     if not hasattr(request.state, "jwt_payload") or not request.state.jwt_payload:
+        logger.warning(f"Upload failed: Authentication required")
         return error_response("Authentication required", 401)
         
     user_id = request.state.jwt_payload.get("user_id")
     user_email = request.state.jwt_payload.get("email")
     
+    logger.info(f"Upload request initiated by user: {user_email} ({user_id}) for property: {property_id}")
+
     if not user_id or not user_email:
+        logger.error(f"Upload failed: Invalid user session data for property {property_id}")
         return error_response("Invalid user session", 401)
 
     # Validate files
@@ -56,7 +61,10 @@ async def upload_pdfs(
         if not file.filename:
             continue
         if not file.filename.lower().endswith('.pdf'):
+            logger.warning(f"Upload rejected: Non-PDF file detected - {file.filename}")
             return error_response(f"Only PDF files are allowed. Got: {file.filename}", 400)
+    
+    logger.info(f"File validation passed. Processing {len(mls_files) if mls_files else 0} MLS files and {len(comps_files) if comps_files else 0} COMPS files.")
     
     new_mls_images = []
     new_comps_images = []
@@ -225,7 +233,6 @@ async def upload_pdfs(
             )
         
         # Construct Response
-        from app.model.doc_model import FileGroup, FilesStructure
         
         # Helper to safely instantiate FileGroup from dict or object
         def to_file_group(data):
@@ -264,7 +271,10 @@ async def update_image_category(
     mongo: MongoService = Depends(get_mongo_service)
 ):
     """Update the category of a specific image."""
+    logger.info(f"Received category update request")
+    
     if not hasattr(request.state, 'jwt_payload'):
+        logger.warning("Category update failed: No auth token")
         return error_response("Authentication required", 401)
     
     user_id = request.state.jwt_payload.get("user_id")
@@ -273,7 +283,10 @@ async def update_image_category(
     image_id = payload.get("image_id")
     category = payload.get("category")
     
+    logger.debug(f"Update Category Payload - Property: {property_id}, Image: {image_id}, Category: {category}")
+    
     if not property_id or not image_id or not category:
+        logger.error("Category update failed: Missing required fields")
         return error_response("property_id, image_id, and category are required", 400)
         
     try:
@@ -314,7 +327,10 @@ async def update_image_category(
 @router.get("/project")
 async def get_user_projects(request: Request, mongo: MongoService = Depends(get_mongo_service)):
     """List all projects for the authenticated user."""
+    logger.info("Received request to list user projects")
+    
     if not hasattr(request.state, "jwt_payload") or not request.state.jwt_payload:
+        logger.warning("List projects failed: No auth token")
         return error_response("Authentication required", 401)
         
     user_id = request.state.jwt_payload.get("user_id")
@@ -345,9 +361,10 @@ async def get_user_projects(request: Request, mongo: MongoService = Depends(get_
 @router.get("/property")
 async def get_property_detail(request: Request, property_id: str = Body(..., embed=True), mongo: MongoService = Depends(get_mongo_service)):
     """Get details for a specific property."""
-    logger.debug(f"GET /doc/property - property_id: {property_id}")
+    logger.info(f"Received request for property details: {property_id}")
     
     if not hasattr(request.state, "jwt_payload") or not request.state.jwt_payload:
+        logger.warning(f"Property detail access denied: No auth token for {property_id}")
         return error_response("Authentication required", 401)
         
     user_id = request.state.jwt_payload.get("user_id")
@@ -396,10 +413,6 @@ async def get_property_detail(request: Request, property_id: str = Body(..., emb
         images = []
         
         for img in all_files:
-            # User requested: "do not store caption and catagory both just keep only catagory"
-            # We map stored caption or category to response "category".
-            # If "caption" exists in DB, use it as category if category is missing/default
-            
             cat = img.get("category", "unknown")
             if cat == "uncategorized" or cat == "unknown":
                  if img.get("caption"):
@@ -409,7 +422,6 @@ async def get_property_detail(request: Request, property_id: str = Body(..., emb
                 "id": img.get("id"),
                 "filename": img.get("filename"),
                 "page": img.get("page"),
-                # "caption" removed per request
                 "url": img.get("url"),
                 "mime_type": img.get("mime_type"),
                 "category": cat
@@ -422,8 +434,11 @@ async def get_property_detail(request: Request, property_id: str = Body(..., emb
             "images": images,
             "pdf_urls": property_doc.get("pdf_urls", []),
             "created_at": property_doc.get("created_at"),
+            "created_at": property_doc.get("created_at"),
             "chat_history": chat_history
         }
+        
+        logger.info(f"Returning details for property {property_id}: {len(images)} images, {len(chat_history)} chat messages")
             
         return success_response(response)
         
@@ -437,12 +452,9 @@ async def get_image(request: Request, image_id: str = Body(..., embed=True), mon
     try:
         from fastapi.responses import RedirectResponse
         
-        property_col = await mongo.get_property_data_collection()
+        logger.debug(f"Serving image request: {image_id}")
         
-        # Need to broaden search because image matching logic below relies on file listing
-        # Ideally we search specifically, but 'files.id' query might not match nested objects perfectly without proper dot notation or wildcards if schema varies
-        # But we can try to find ANY doc containing the ID in the known paths
-        
+        property_col = await mongo.get_property_data_collection()    
         property_doc = await property_col.find_one({
             "$or": [
                 {"files.id": image_id},

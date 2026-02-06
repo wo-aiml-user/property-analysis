@@ -23,7 +23,6 @@ class OpenAIClient:
             raise ValueError("OPENAI_API_KEY not configured in settings")
         
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
-        # Use specific model as requested
         self.model = settings.OPENAI_MODEL
         self.s3_service = get_s3_service()
         logger.info(f"OpenAI client initialized with model: {self.model}")

@@ -63,7 +63,7 @@ async def register(request: UserRegister, mongo: MongoService = Depends(get_mong
         return success_response(UserResponse(**user_doc), 201)
         
     except Exception as e:
-        logger.error(f"Registration error: {e}")
+        logger.error(f"Registration error for {request.email}: {e}")
         return error_response("Registration failed", 500)
 
 @router.post("/login", response_model=TokenResponse)
@@ -74,9 +74,11 @@ async def login(response: Response, request: UserLogin, mongo: MongoService = De
         user = await users_collection.find_one({"email": request.email})
         
         if not user:
+            logger.warning(f"Login failed: User not found for email {request.email}")
             return error_response("You haven't signed up. Please sign up first.", 401)
             
         if not verify_password(request.password, user["hashed_password"]):
+            logger.warning(f"Login failed: Invalid password for user {request.email}")
             return error_response("Invalid email or password", 401)
             
         if not user.get("is_active", True):
@@ -128,7 +130,7 @@ async def login(response: Response, request: UserLogin, mongo: MongoService = De
         return resp
         
     except Exception as e:
-        logger.error(f"Login error: {e}")
+        logger.error(f"Login error for {request.email}: {e}")
         return error_response("Login failed", 500)
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -140,6 +142,7 @@ async def refresh_token(
 ):
     """Rotate refresh token and issue new access token."""
     if not refresh_token:
+        logger.warning("Token refresh failed: Missing refresh_token cookie")
         return error_response("Refresh token missing", 401)
         
     try:

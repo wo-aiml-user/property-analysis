@@ -55,6 +55,10 @@ async def regenerate_images(
     user_id = request.state.jwt_payload.get("user_id")
     property_id = request_body.property_id
     
+    logger.info(f"Regeneration request from user {user_id} for property {property_id}")
+    logger.debug(f"Input Image IDs: {request_body.image_ids}")
+    logger.debug(f"User Feedback: {request_body.user_feedback}")
+
     # Check property ownership
     property_col = await mongo.get_property_data_collection()
     
@@ -101,7 +105,10 @@ async def regenerate_images(
         image_urls.append(image_map[img_id])
     
     if not image_urls:
+        logger.warning(f"Regeneration failed: No valid image URLs found for IDs {request_body.image_ids}")
         return error_response("No valid images found for the provided IDs", 400)
+    
+    logger.info(f"Found {len(image_urls)} source images. Sending to OpenAI...")
     
     try:
         # Use OpenAI Client
@@ -163,6 +170,7 @@ async def regenerate_images(
              upsert=True
         )
         
+        logger.info(f"Regeneration completed and history saved. Returning {len(regenerated)} new images.")
         return success_response(response.model_dump(), 200)
         
     except Exception as e:
@@ -180,7 +188,10 @@ async def get_chat_history(
     """
     # 1. Authentication Check
     if not hasattr(request.state, "jwt_payload") or not request.state.jwt_payload:
+        logger.warning("Get chat history failed: No auth token")
         return error_response("Authentication required", 401)
+        
+    logger.info(f"Fetching chat history for property: {property_id}")
 
     try:
         chat_col = await mongo.get_chat_collection()
@@ -188,8 +199,10 @@ async def get_chat_history(
         
         if not chat_doc:
             # Return empty history if not found
+            logger.info(f"No chat history found for property {property_id}")
             return ChatHistory(property_id=property_id, messages=[])
             
+        logger.info(f"Found chat history with {len(chat_doc.get('messages', []))} messages")
         return ChatHistory(**chat_doc)
         
     except Exception as e:

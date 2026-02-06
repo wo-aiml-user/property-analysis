@@ -5,19 +5,7 @@ Pydantic models for Document operations.
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-
 from enum import Enum
-
-class ImageCategory(str, Enum):
-    EXTERIOR = "exterior"
-    KITCHEN = "kitchen"
-    LIVING_ROOM = "living_room"
-    DINING_ROOM = "dining_room"
-    BEDROOM = "bedroom"
-    BATHROOM = "bathroom"
-    INTERIOR = "interior" # General interior
-    OTHER = "other"
-    UNCATEGORIZED = "uncategorized"
 
 class ExtractedImage(BaseModel):
     """Model for an extracted image from PDF."""
