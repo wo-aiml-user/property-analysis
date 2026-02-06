@@ -2,13 +2,13 @@
 Chat Controller - Image regeneration endpoint.
 """
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Body
 from loguru import logger
 from datetime import datetime
 from app.model.doc_model import PropertyData
-
+from app.model.chat_model import ChatMessage
 from app.utils.response import success_response, error_response
-from app.model.chat_model import ChatRequest, ChatResponse, RegeneratedImage
+from app.model.chat_model import ChatRequest, ChatResponse, RegeneratedImage, ChatHistory
 from app.llm.openai_client import get_openai_client
 from app.services.mongo_service import get_mongo_service, MongoService
 
@@ -56,7 +56,9 @@ async def regenerate_images(
     property_id = request_body.property_id
     
     # Check property ownership
-    property_doc = await mongo.db["property_data"].find_one({
+    property_col = await mongo.get_property_data_collection()
+    
+    property_doc = await property_col.find_one({
         "property_id": property_id,
         "user_id": user_id
     })
@@ -65,10 +67,30 @@ async def regenerate_images(
         return error_response("Property not found or access denied", 404)
     
     # 2. Lookup image IDs to get S3 URLs
-    property_data = PropertyData(**property_doc)
+    # property_data = PropertyData(**property_doc) # Skip Pydantic processing to handle legacy/mixed data
+    
+    files_data = property_doc.get("files", {})
+    all_files = []
+    
+    if isinstance(files_data, list):
+        all_files = files_data
+    else:
+        # Flatten nested structure safely
+        mls_data = files_data.get("mls", {})
+        if isinstance(mls_data, dict):
+            all_files.extend(mls_data.get("images", []))
+        elif isinstance(mls_data, list):
+            all_files.extend(mls_data)
+            
+        comps_data = files_data.get("comps", {})
+        if isinstance(comps_data, dict):
+            all_files.extend(comps_data.get("images", []))
+        elif isinstance(comps_data, list):
+            all_files.extend(comps_data)
     
     # Create a mapping of image ID -> S3 URL
-    image_map = {img.id: img.url for img in property_data.files}
+    # Note: Accessing dict keys since we rely on raw mongo doc
+    image_map = {img.get("id"): img.get("url") for img in all_files if img.get("id")}
     
     # Get S3 URLs for requested image IDs
     image_urls = []
@@ -119,23 +141,26 @@ async def regenerate_images(
         )
         
         # Save Chat History (Async)
-        chat_entry = {
-            "timestamp": datetime.utcnow(),
-            "role": "user",
-            "content": request_body.user_feedback,
-            "image_ids": request_body.image_ids  # Store IDs instead of URLs
-        }
+
+        chat_entry = ChatMessage(
+            role="user",
+            content=request_body.user_feedback,
+            image_ids=request_body.image_ids
+        )
         
-        response_entry = {
-            "timestamp": datetime.utcnow(),
-            "role": "assistant",
-            "images": [img.model_dump() for img in regenerated],
-            "description": result.get("description", "")
-        }
+        response_entry = ChatMessage(
+            role="assistant",
+            images=regenerated,
+            description=result.get("description", "")
+        )
         
-        await mongo.db["property_data"].update_one(
-            {"property_id": property_id},
-            {"$push": {"chat_history": {"$each": [chat_entry, response_entry]}}}
+        chat_col = await mongo.get_chat_collection()
+        
+        # Update shared chat history document for this property
+        await chat_col.update_one(
+             {"property_id": property_id},
+             {"$push": {"messages": {"$each": [chat_entry.model_dump(), response_entry.model_dump()]}}},
+             upsert=True
         )
         
         return success_response(response.model_dump(), 200)
@@ -143,3 +168,30 @@ async def regenerate_images(
     except Exception as e:
         logger.error(f"Error regenerating images: {e}")
         return error_response(f"Error regenerating images: {str(e)}", 500)
+
+@router.get("/history", response_model=ChatHistory)
+async def get_chat_history(
+    request: Request,
+    property_id: str = Body(..., embed=True),
+    mongo: MongoService = Depends(get_mongo_service)
+):
+    """
+    Get chat history for a specific property.
+    """
+    # 1. Authentication Check
+    if not hasattr(request.state, "jwt_payload") or not request.state.jwt_payload:
+        return error_response("Authentication required", 401)
+
+    try:
+        chat_col = await mongo.get_chat_collection()
+        chat_doc = await chat_col.find_one({"property_id": property_id})
+        
+        if not chat_doc:
+            # Return empty history if not found
+            return ChatHistory(property_id=property_id, messages=[])
+            
+        return ChatHistory(**chat_doc)
+        
+    except Exception as e:
+        logger.error(f"Error fetching chat history: {e}")
+        return error_response("Failed to fetch chat history", 500)

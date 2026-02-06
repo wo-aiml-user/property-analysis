@@ -76,58 +76,43 @@ class MongoService:
             return
             
         try:
-            # Ensure property_data collection exists
-            await self._ensure_collection_exists(settings.MONGODB_COLLECTION_NAME)
+            # 1. User Collection
+            await self._ensure_collection_exists(settings.MONGODB_USER_COLLECTION)
+            user_col = self.db[settings.MONGODB_USER_COLLECTION]
+            user_indexes = await user_col.index_information()
             
-            # Property_data collection indexes (stores both users and properties)
-            property_data = self.db[settings.MONGODB_COLLECTION_NAME]
+            if "email_1" not in user_indexes:
+                await user_col.create_index("email", unique=True)
+                logger.info("Created email index on prop_user_data")
             
-            # Get existing indexes
-            existing_indexes = await property_data.index_information()
+            # Index for refresh token lookup
+            if "refresh_tokens.token_hash_1" not in user_indexes:
+                await user_col.create_index("refresh_tokens.token_hash")
+                logger.info("Created refresh_tokens.token_hash index on prop_user_data")
+
+            # 2. Property Collection
+            await self._ensure_collection_exists(settings.MONGODB_PROPERTY_COLLECTION)
+            prop_col = self.db[settings.MONGODB_PROPERTY_COLLECTION]
+            prop_indexes = await prop_col.index_information()
             
-            # Create email index only if it doesn't exist
-            if "email_1" not in existing_indexes:
-                await property_data.create_index("email", unique=True, sparse=True)
-                logger.info("Created email index on property_data")
-            else:
-                logger.debug("Email index already exists, skipping creation")
+            if "property_id_1" not in prop_indexes:
+                await prop_col.create_index("property_id", unique=True)
+                logger.info("Created property_id index on prop_property_data")
+                
+            if "user_id_1" not in prop_indexes:
+                await prop_col.create_index("user_id")
+                logger.info("Created user_id index on prop_property_data")
+
+            # 3. Chat History Collection
+            await self._ensure_collection_exists(settings.MONGODB_CHAT_COLLECTION)
+            chat_col = self.db[settings.MONGODB_CHAT_COLLECTION]
+            chat_indexes = await chat_col.index_information()
             
-            # Create properties.property_id index only if it doesn't exist
-            if "properties.property_id_1" not in existing_indexes:
-                await property_data.create_index("properties.property_id")
-                logger.info("Created properties.property_id index")
-            else:
-                logger.debug("Properties.property_id index already exists, skipping creation")
+            if "property_id_1" not in chat_indexes:
+                await chat_col.create_index("property_id", unique=True)
+                logger.info("Created property_id index on prop_chat_history")
             
-            # Ensure refresh_tokens collection exists
-            await self._ensure_collection_exists("refresh_tokens")
-            
-            # Refresh tokens collection indexes
-            tokens = self.db["refresh_tokens"]
-            existing_token_indexes = await tokens.index_information()
-            
-            # Create token_hash index only if it doesn't exist
-            if "token_hash_1" not in existing_token_indexes:
-                await tokens.create_index("token_hash", unique=True)
-                logger.info("Created token_hash index")
-            else:
-                logger.debug("Token_hash index already exists, skipping creation")
-            
-            # Create user_id index only if it doesn't exist
-            if "user_id_1" not in existing_token_indexes:
-                await tokens.create_index("user_id")
-                logger.info("Created user_id index")
-            else:
-                logger.debug("User_id index already exists, skipping creation")
-            
-            # Create expires_at TTL index only if it doesn't exist
-            if "expires_at_1" not in existing_token_indexes:
-                await tokens.create_index("expires_at", expireAfterSeconds=0)
-                logger.info("Created expires_at TTL index")
-            else:
-                logger.debug("Expires_at index already exists, skipping creation")
-            
-            logger.info("MongoDB indexes verified")
+            logger.info("MongoDB indexes verified for all collections")
         except Exception as e:
             logger.error(f"Error creating indexes: {e}")
 
@@ -143,12 +128,16 @@ class MongoService:
         return self.db[collection_name]
     
     async def get_users_collection(self):
-        """Get the collection that stores user data (property_data)."""
-        return await self.get_collection(settings.MONGODB_COLLECTION_NAME)
+        """Get the users collection."""
+        return await self.get_collection(settings.MONGODB_USER_COLLECTION)
     
     async def get_property_data_collection(self):
-        """Get the property_data collection."""
-        return await self.get_collection(settings.MONGODB_COLLECTION_NAME)
+        """Get the properties collection."""
+        return await self.get_collection(settings.MONGODB_PROPERTY_COLLECTION)
+
+    async def get_chat_collection(self):
+        """Get the chat history collection."""
+        return await self.get_collection(settings.MONGODB_CHAT_COLLECTION)
 
     def close(self):
         """Close MongoDB connection."""

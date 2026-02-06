@@ -42,8 +42,11 @@ class Settings(BaseSettings):
     # MongoDB configuration
     MONGODB_URI: str = ""
     MONGODB_DB_NAME: str = ""
-    MONGODB_COLLECTION_NAME: str = ""
-    
+    MONGODB_USER_COLLECTION: str = "user_data"
+    MONGODB_PROPERTY_COLLECTION: str = "property_data"
+    MONGODB_CHAT_COLLECTION: str = "chat_history"
+
+
     class Config:
         env_file = ".env"  # Single .env file for all environments
         case_sensitive = True

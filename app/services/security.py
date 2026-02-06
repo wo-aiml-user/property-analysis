@@ -33,7 +33,6 @@ def get_password_hash(password: str) -> str:
         return pwd_context.hash(password)
     except Exception as e:
         logger.error(f"Error in pwd_context.hash: {e}")
-        # Fallback debug or re-raise
         raise e
 
 def generate_opaque_token(length: int = 64) -> str:

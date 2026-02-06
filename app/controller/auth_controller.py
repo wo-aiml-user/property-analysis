@@ -5,6 +5,7 @@ Authentication Controller - Register, Login, Refresh, Logout.
 from fastapi import APIRouter, Response, Request, Depends, Cookie
 from datetime import timedelta, datetime
 from typing import Optional
+import uuid
 from loguru import logger
 
 from app.utils.response import error_response, success_response
@@ -46,14 +47,13 @@ async def register(request: UserRegister, mongo: MongoService = Depends(get_mong
             logger.error(f"Password hashing failed: {e}")
             raise e
 
-        # Create user document with empty properties array
+        # Create user document (normalized - no properties array)
         user_doc = {
             "email": request.email,
             "hashed_password": hashed_pw,
             "full_name": request.full_name,
             "created_at": datetime.utcnow(),
-            "is_active": True,
-            "properties": []  # Initialize empty properties array
+            "is_active": True
         }
         
         logger.info("Inserting user into database...")
@@ -67,13 +67,16 @@ async def register(request: UserRegister, mongo: MongoService = Depends(get_mong
         return error_response("Registration failed", 500)
 
 @router.post("/login", response_model=TokenResponse)
-async def login(response: Response, request: UserLogin, user_agent: Optional[str] = None, mongo: MongoService = Depends(get_mongo_service)):
+async def login(response: Response, request: UserLogin, mongo: MongoService = Depends(get_mongo_service)):
     """Login and issue access/refresh tokens."""
     try:
         users_collection = await mongo.get_users_collection()
         user = await users_collection.find_one({"email": request.email})
         
-        if not user or not verify_password(request.password, user["hashed_password"]):
+        if not user:
+            return error_response("You haven't signed up. Please sign up first.", 401)
+            
+        if not verify_password(request.password, user["hashed_password"]):
             return error_response("Invalid email or password", 401)
             
         if not user.get("is_active", True):
@@ -94,14 +97,25 @@ async def login(response: Response, request: UserLogin, user_agent: Optional[str
             "created_at": datetime.utcnow(),
             "expires_at": datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
             "revoked": False,
-            "user_agent": user_agent
         }
         
         # Store refresh token
-        await mongo.db["refresh_tokens"].insert_one(refresh_doc)
+        await users_collection.update_one(
+            {"_id": user["_id"]},
+            {"$push": {"refresh_tokens": refresh_doc}}
+        )
         
-        # Set HttpOnly Cookie
-        response.set_cookie(
+        logger.info(f"User logged in successfully: {user.get('full_name')}")
+        
+        # Create response first
+        resp = success_response(TokenResponse(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        ))
+        
+        # Set HttpOnly Cookie on the response object
+        resp.set_cookie(
             key=REFRESH_COOKIE_NAME,
             value=refresh_token,
             httponly=True,
@@ -111,13 +125,7 @@ async def login(response: Response, request: UserLogin, user_agent: Optional[str
             max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
         )
         
-        logger.info(f"User logged in successfully: {user.get('email')}")
-        
-        return success_response(TokenResponse(
-            access_token=access_token,
-            refresh_token=refresh_token,
-            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
-        ))
+        return resp
         
     except Exception as e:
         logger.error(f"Login error: {e}")
@@ -136,18 +144,24 @@ async def refresh_token(
         
     try:
         token_hash = get_token_hash(refresh_token)
-        tokens_col = mongo.db["refresh_tokens"]
+        users_col = await mongo.get_users_collection()
         
-        # Find token
-        stored_token = await tokens_col.find_one({"token_hash": token_hash})
+        # Find user with this token
+        user = await users_col.find_one({"refresh_tokens.token_hash": token_hash})
         
-        if not stored_token:
-            # Token reuse detection? If we can't find it, it might have been rotated or is just garbage.
-            # Ideally we would track it, but for now just fail.
+        if not user:
+            # Token not found in any user (possibly rotated/deleted)
             logger.warning("Attempted to use unknown refresh token")
             response.delete_cookie(REFRESH_COOKIE_NAME, path="/auth/refresh")
             return error_response("Invalid refresh token", 401)
             
+        # Find the specific token object in the list
+        stored_token = next((t for t in user.get("refresh_tokens", []) if t["token_hash"] == token_hash), None)
+        
+        if not stored_token:
+            # Should not happen if query matched
+            return error_response("Token mismatch", 401)
+
         # Check if revoked
         if stored_token.get("revoked"):
             logger.warning(f"Attempted to use revoked token")
@@ -161,20 +175,13 @@ async def refresh_token(
             
         # --- Token Rotation ---
         
-        # 1. Revoke current token
-        await tokens_col.update_one(
-            {"_id": stored_token["_id"]},
-            {"$set": {"revoked": True}}
+        # 1. Pull old token (delete it)
+        await users_col.update_one(
+            {"_id": user["_id"]},
+            {"$pull": {"refresh_tokens": {"token_hash": token_hash}}}
         )
         
         # 2. Issue new tokens
-        users_col = await mongo.get_users_collection()
-        from bson.objectid import ObjectId
-        user = await users_col.find_one({"_id": ObjectId(stored_token["user_id"])})
-        
-        if not user:
-            return error_response("User not found", 401)
-            
         new_access_token = JWTAuth.create_token(
             {"user_id": str(user["_id"]), "email": user["email"]}
         )
@@ -183,18 +190,25 @@ async def refresh_token(
         new_refresh_hash = get_token_hash(new_refresh_token)
         
         new_refresh_doc = {
-            "user_id": stored_token["user_id"],
+            "user_id": str(user["_id"]),
+            "family_id": stored_token.get("family_id", str(uuid.uuid4())), # Preserve family ID if exists
             "token_hash": new_refresh_hash,
             "created_at": datetime.utcnow(),
             "expires_at": datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
             "revoked": False,
-            "user_agent": request.headers.get("user-agent")
         }
         
-        await tokens_col.insert_one(new_refresh_doc)
+        # Add new token to user's list
+        await users_col.update_one(
+            {"_id": user["_id"]},
+            {"$push": {"refresh_tokens": new_refresh_doc}}
+        )
         
-        # Set new cookie
-        response.set_cookie(
+        # Create response
+        resp = success_response(TokenResponse(access_token=new_access_token))
+        
+        # Set new cookie on response
+        resp.set_cookie(
             key=REFRESH_COOKIE_NAME,
             value=new_refresh_token,
             httponly=True,
@@ -204,26 +218,31 @@ async def refresh_token(
             max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
         )
         
-        return success_response(TokenResponse(access_token=new_access_token))
-
+        return resp
+    
     except Exception as e:
         logger.error(f"Refresh error: {e}")
         return error_response("Token refresh failed", 500)
 
 @router.post("/logout")
 async def logout(response: Response, refresh_token: Optional[str] = Cookie(None, alias=REFRESH_COOKIE_NAME), mongo: MongoService = Depends(get_mongo_service)):
-    """Logout user and revoke token."""
+    """Logout user and delete token."""
     logger.info("Logout request received")
     if refresh_token:
         try:
             token_hash = get_token_hash(refresh_token)
-            await mongo.db["refresh_tokens"].update_one(
-                {"token_hash": token_hash},
-                {"$set": {"revoked": True}}
+            users_col = await mongo.get_users_collection()
+            
+            # Delete token from user's list
+            await users_col.update_one(
+                {"refresh_tokens.token_hash": token_hash},
+                {"$pull": {"refresh_tokens": {"token_hash": token_hash}}}
             )
         except Exception:
             pass # Fail silently on logout
             
-    response.delete_cookie(REFRESH_COOKIE_NAME, path="/auth/refresh")
+    # Create response and delete cookie
+    resp = success_response({"message": "Logged out successfully"})
+    resp.delete_cookie(REFRESH_COOKIE_NAME, path="/auth/refresh")
     logger.info("Logged out successfully")
-    return success_response({"message": "Logged out successfully"})
+    return resp

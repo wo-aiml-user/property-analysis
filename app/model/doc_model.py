@@ -24,29 +24,40 @@ class ExtractedImage(BaseModel):
     id: str = ""  
     filename: str
     page: int
-    caption: str = ""
     url: str  
     mime_type: str = "image/png"
-    category: str = "uncategorized"  # Frontend handles categorization
+    category: str = "uncategorized"
+
+class FileGroup(BaseModel):
+    url: List[str] 
+    images: List[ExtractedImage]
+    total_images: int
+    total_pages: int
+
+class FilesStructure(BaseModel):
+    mls: FileGroup = Field(default_factory=lambda: FileGroup(url=[], images=[], total_images=0, total_pages=0))
+    comps: FileGroup = Field(default_factory=lambda: FileGroup(url=[], images=[], total_images=0, total_pages=0))
 
 class PDFUploadResponse(BaseModel):
     """Response model for PDF upload."""
     property_id: str
+    user_id: str
     total_files: int
-    total_pages: int
-    total_images: int
-    images: List[ExtractedImage]
-    pdf_urls: List[str] = []
+    files: FilesStructure
     message: str = "PDFs processed successfully"
+
+class PropertyFiles(BaseModel):
+    """Categorized property files."""
+    mls: FileGroup = Field(default_factory=lambda: FileGroup(url=[], images=[], total_images=0, total_pages=0))
+    comps: FileGroup = Field(default_factory=lambda: FileGroup(url=[], images=[], total_images=0, total_pages=0))
 
 class PropertyData(BaseModel):
     """Model for storing property/session data in MongoDB."""
     property_id: str
     user_id: str
-    files: List[ExtractedImage] # Storing all in one list for simplicity in DB, will filter in API
+    files: PropertyFiles = PropertyFiles()
     pdf_urls: List[str] = []
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    chat_history: List[Dict[str, Any]] = []
 
 class ProjectSummary(BaseModel):
     """Summary of a property project for the portfolio list."""
@@ -60,7 +71,6 @@ class ExtractedImageResponse(BaseModel):
     id: str
     filename: str
     page: int
-    caption: str = ""
     mime_type: str = "image/png"
 
 class PropertyDataResponse(BaseModel):
@@ -70,4 +80,3 @@ class PropertyDataResponse(BaseModel):
     files: List[ExtractedImageResponse]
     pdf_urls: List[str] = []
     created_at: datetime
-    chat_history: List[Dict[str, Any]] = []

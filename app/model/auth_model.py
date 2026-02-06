@@ -3,7 +3,7 @@ Pydantic models for Authentication operations.
 """
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 class UserLogin(BaseModel):
@@ -43,6 +43,7 @@ class UserInDB(BaseModel):
     full_name: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     is_active: bool = True
+    refresh_tokens: List["RefreshToken"] = []
 
 class UserResponse(BaseModel):
     """Public user profile response."""
@@ -55,7 +56,6 @@ class TokenResponse(BaseModel):
     """Token response model."""
     access_token: str
     refresh_token: Optional[str] = None
-    token_type: str = "bearer"
     expires_in: int = Field(default=3600, description="Access token expiry in seconds")
 
 class RefreshToken(BaseModel):
@@ -66,4 +66,3 @@ class RefreshToken(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     revoked: bool = False
     family_id: str = Field(..., description="ID to track token families for rotation")
-    user_agent: Optional[str] = None
